@@ -103,6 +103,13 @@ from pathlib import Path
 
 tqdm.pandas()
 
+# Auto-updater for KB / trajectory DB / RAG after runs and benchmarks.
+# Imported lazily by name to avoid any heavy dependencies if the feature is off.
+try:
+    from experiment import kb_updater
+except Exception:
+    kb_updater = None
+
 
 def get_git_commit() -> str:
     """Get current git commit hash for reproducibility tracking."""
@@ -3541,6 +3548,10 @@ def verbose_test_llama(
         json.dump(run_json, f, indent=2, default=str)
     print(f"\n[JSON] Run saved to: {json_path}")
 
+    # Update KB / DB / RAG with the new run trace.
+    if kb_updater is not None:
+        kb_updater.update_after_run(run_json)
+
     return trace, total_attempts, run_json
 
 
@@ -3756,6 +3767,8 @@ def run_benchmark(
             for i, scenario in enumerate(batch_scenarios):
                 trace, attempts, run_json = verbose_test_llama(scenario, agent)
                 benchmark_run_jsons.append(run_json)
+                if kb_updater is not None:
+                    kb_updater.update_after_run(run_json)
                 success = attempts < MAX_INTERACTIONS
                 if success:
                     total_successes += 1
@@ -3827,6 +3840,8 @@ def run_benchmark(
                     row,
                 )
                 benchmark_run_jsons.append(run_json)
+                if kb_updater is not None:
+                    kb_updater.update_after_run(run_json)
 
                 success = attempts < MAX_INTERACTIONS
                 if success:
@@ -4038,6 +4053,10 @@ def run_benchmark(
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(run_json, f, indent=2, default=str)
     print(f"[JSON] {len(benchmark_run_jsons)} run JSONs saved to: {results_dir}/")
+
+    # Full KB / DB / RAG rebuild at benchmark boundary.
+    if kb_updater is not None:
+        kb_updater.update_after_benchmark()
 
     return benchmark
 
@@ -5180,12 +5199,32 @@ if __name__ == "__main__":
         default=1,
         help="Total number of workers for parallel benchmark (default: 1)",
     )
+    parser.add_argument(
+        "--update-kb",
+        type=str,
+        default=os.environ.get("AUTORED_UPDATE_KB", "all").lower().strip(),
+        choices=["off", "run", "benchmark", "all"],
+        help=(
+            "After runs/benchmarks automatically append to KB/DB/RAG stores. "
+            "Can also be set with AUTORED_UPDATE_KB env var (default: all)."
+        ),
+    )
     args = parser.parse_args()
 
     PLANNER_PATH = args.planner_path
     GENERATOR_PATH = args.generator_path
     BASE_GENERATOR_PATH = args.base_generator_path
     BENCHMARK_LOG_PATH = args.benchmark_output
+
+    # Configure the post-run KB/DB/RAG updater.
+    if kb_updater is not None:
+        kb_updater.set_kb_updater(
+            kb_updater.KBUpdater(
+                mode=args.update_kb,
+                worker_id=getattr(args, "worker_id", 0),
+                num_workers=getattr(args, "num_workers", 1),
+            )
+        )
 
     # Load victim model (must happen inside __main__ for vLLM spawn safety)
     _load_models()
