@@ -289,6 +289,51 @@ def _load_models():
     print(f"[LOAD] ✓ {LLAMA_PATH} loaded ({MODEL_LOAD_TIME['victim']:.1f}s)")
 
 
+def _truncate_system_content_to_fit(messages: list, tokenizer, max_total_tokens: int) -> list:
+    """Trim the system/defense content in a messages list until it fits max_total_tokens.
+
+    vLLM raises a hard error if the prompt exceeds max_model_len; this avoids killing
+    the worker by shortening the long defense text while preserving the user message.
+    """
+    messages = [dict(m) for m in messages]
+    system_idx = None
+    for i, m in enumerate(messages):
+        if m.get("role") == "system":
+            system_idx = i
+            break
+    if system_idx is None:
+        return messages
+
+    original_len = len(messages[system_idx]["content"])
+    min_chars = 100
+    while True:
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        prompt_len = len(tokenizer(prompt, add_special_tokens=False)["input_ids"])
+        if prompt_len <= max_total_tokens or len(messages[system_idx]["content"]) <= min_chars:
+            truncated_chars = len(messages[system_idx]["content"])
+            if truncated_chars < original_len:
+                print(
+                    f"    [WARN] Long victim prompt truncated: {original_len} -> "
+                    f"{truncated_chars} system chars ({prompt_len} tokens)"
+                )
+            return messages
+        # Shorten system content by 10% each iteration.  The prompt is dominated
+        # by the defense text, so this converges quickly.
+        content = messages[system_idx]["content"]
+        messages[system_idx]["content"] = content[: int(len(content) * 0.9)]
+
+
+def _max_victim_prompt_tokens(max_new_tokens: int = 200) -> int:
+    """Return the safe token budget for a victim prompt (reserves room for output)."""
+    try:
+        max_model_len = llama_model.llm_engine.model_config.max_model_len
+    except Exception:
+        max_model_len = 4096
+    return max_model_len - max_new_tokens - 10
+
+
 def chat_with_llama_messages_batch(messages_batch: list) -> list:
     if not messages_batch:
         return []
@@ -297,18 +342,22 @@ def chat_with_llama_messages_batch(messages_batch: list) -> list:
     original_padding_side = llama_tokenizer.padding_side
     llama_tokenizer.padding_side = "left"
 
+    max_tokens = 200
+    max_prompt_tokens = _max_victim_prompt_tokens(max_tokens)
+
     prompts = []
     for messages in messages_batch:
+        trimmed = _truncate_system_content_to_fit(messages, llama_tokenizer, max_prompt_tokens)
         prompts.append(
             llama_tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                trimmed, tokenize=False, add_generation_prompt=True
             )
         )
 
     print(f"    [DEBUG] chat_with_llama_messages_batch: generating for {len(messages_batch)} conversations...", flush=True)
     t0 = time.time()
     
-    sampling_params = SamplingParams(max_tokens=200, temperature=0.7, top_p=0.9)
+    sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
     outputs = llama_model.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
     
     print(f"    [DEBUG] chat_with_llama_messages_batch: generation complete in {time.time() - t0:.2f}s.", flush=True)
@@ -332,22 +381,26 @@ def chat_with_llama_batch(
     original_padding_side = llama_tokenizer.padding_side
     llama_tokenizer.padding_side = "left"
 
+    max_tokens = 200
+    max_prompt_tokens = _max_victim_prompt_tokens(max_tokens)
+
     prompts = []
     for pre, attack, post in zip(pre_defenses, attacks, post_defenses):
         messages = [
             {"role": "system", "content": f"{pre}\n\n{post}"},
             {"role": "user", "content": attack},
         ]
+        trimmed = _truncate_system_content_to_fit(messages, llama_tokenizer, max_prompt_tokens)
         prompts.append(
             llama_tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                trimmed, tokenize=False, add_generation_prompt=True
             )
         )
 
     print(f"    [DEBUG] chat_with_llama_batch: generating for {len(attacks)} attacks...", flush=True)
     t0 = time.time()
     
-    sampling_params = SamplingParams(max_tokens=200, temperature=0.7, top_p=0.9)
+    sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
     outputs = llama_model.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
     
     print(f"    [DEBUG] chat_with_llama_batch: generation complete in {time.time() - t0:.2f}s.", flush=True)
@@ -379,11 +432,14 @@ def chat_with_llama(pre_defense: str, attack: str, post_defense: str) -> str:
         },
     ]
 
+    max_tokens = 200
+    max_prompt_tokens = _max_victim_prompt_tokens(max_tokens)
+    trimmed = _truncate_system_content_to_fit(messages, llama_tokenizer, max_prompt_tokens)
     prompt = llama_tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+        trimmed, tokenize=False, add_generation_prompt=True
     )
 
-    sampling_params = SamplingParams(max_tokens=200, temperature=0.7, top_p=0.9)
+    sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
     outputs = llama_model.generate([prompt], sampling_params=sampling_params, use_tqdm=False)
 
     return outputs[0].outputs[0].text.strip()
