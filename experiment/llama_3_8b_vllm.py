@@ -139,6 +139,7 @@ GIT_COMMIT = get_git_commit()
 # =============================================================================
 
 DISTILBERT_CKPT = "pre_trained/pi_reward_model"
+DISTILBERT_BASE = "distilbert-base-uncased"
 STRATEGY_CKPT = "experiment/strategy_predictor.pth"
 DATA_PATH = "experiment/raw_dump_defenses.jsonl.bz2"
 EXT_DATA_PATH = "data/autored_verified_v1.jsonl"
@@ -443,7 +444,16 @@ class DecisionType(IntEnum):
 def load_decision_model(ckpt_path: str):
     print(f"\n[LOAD] Loading Decision model (DistilBERT) from: {ckpt_path}")
     t0 = time.time()
-    tokenizer = AutoTokenizer.from_pretrained(ckpt_path, local_files_only=True)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(ckpt_path, local_files_only=True)
+    except OSError:
+        print(
+            f"[LOAD] Tokenizer files not found in {ckpt_path}; "
+            f"falling back to {DISTILBERT_BASE}"
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            DISTILBERT_BASE, local_files_only=True
+        )
     model = DistilBertForSequenceClassification.from_pretrained(
         ckpt_path, local_files_only=True
     ).to(device)
@@ -458,7 +468,16 @@ def load_access_code_predictor(ckpt_path: str):
     if not os.path.exists(ckpt_path):
         print(f"[WARN] Access Code Predictor not found at {ckpt_path}, returning None")
         return None, None
-    tokenizer = AutoTokenizer.from_pretrained(ckpt_path, local_files_only=True)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(ckpt_path, local_files_only=True)
+    except OSError:
+        print(
+            f"[LOAD] Tokenizer files not found in {ckpt_path}; "
+            f"falling back to {DISTILBERT_BASE}"
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            DISTILBERT_BASE, local_files_only=True
+        )
     model = DistilBertForSequenceClassification.from_pretrained(
         ckpt_path, local_files_only=True
     ).to(device)
