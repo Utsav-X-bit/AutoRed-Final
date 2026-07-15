@@ -507,7 +507,10 @@ def _load_shared_lora_base(base_model_path: str):
     shared_lora_model = LLM(
         model=base_model_path,
         enable_lora=True,
-        max_lora_rank=64,
+        max_lora_rank=128,
+        max_loras=2,
+        max_cpu_loras=8,
+        lora_extra_vocab_size=256,
         gpu_memory_utilization=0.48,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -548,7 +551,36 @@ def _load_lora_role_model(
         return tokenizer, model
 
     tokenizer, model = _load_shared_lora_base(base_model_path)
-    request = LoRARequest(f"{role_name.lower()}_adapter", lora_slot, ckpt_path)
+
+    # Sanity check: the LoRA weights must actually be present. vLLM may silently
+    # fall back to the base model if the adapter weight file is missing.
+    weight_files = list(Path(ckpt_path).glob("adapter_model.*"))
+    if not weight_files:
+        print(
+            f"[WARN] No adapter_model.* weights found in {ckpt_path}; "
+            "vLLM will generate with the base model only!"
+        )
+    else:
+        print(f"[LOAD] Found adapter weights: {[f.name for f in weight_files]}")
+
+    # vLLM 0.8.5+ optionally tracks base_model_name for model cards and lineage.
+    # Build the request safely so this still works on older vLLM builds.
+    lora_kwargs = {
+        "lora_name": f"{role_name.lower()}_adapter",
+        "lora_int_id": lora_slot,
+        "lora_path": ckpt_path,
+    }
+    try:
+        import inspect
+
+        if "base_model_name" in inspect.signature(LoRARequest.__init__).parameters:
+            lora_kwargs["base_model_name"] = base_model_path
+        request = LoRARequest(**lora_kwargs)
+    except TypeError:
+        request = LoRARequest(
+            f"{role_name.lower()}_adapter", lora_slot, ckpt_path
+        )
+
     if role_name.lower().startswith("plan"):
         planner_lora_request = request
     else:
