@@ -12,7 +12,7 @@ const formatNumber = (value: number) => Number.isFinite(value) ? value.toFixed(2
 
 export default function PlannerInsightsPanel({ run, selectedAttemptIndex }: Props) {
   const attempt = run.attempts[selectedAttemptIndex];
-  const parsedPlan = parsePlanText(attempt?.generator.plan_raw);
+  const parsedPlan = parsePlanText(attempt?.generator.plan_raw, attempt?.generator);
   const state = buildPlannerState(run, selectedAttemptIndex);
   const timeline = attemptTimeline(run);
   const rows = strategyRows(run.strategy_stats);

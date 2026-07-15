@@ -2,7 +2,7 @@ import { Attempt } from '../types/autored';
 import { parsePlanText } from '../utils/planner';
 
 export default function GeneratorCard({ attempt }: { attempt: Attempt }) {
-  const parsedPlan = parsePlanText(attempt.generator.plan_raw);
+  const parsedPlan = parsePlanText(attempt.generator.plan_raw, attempt.generator);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4">

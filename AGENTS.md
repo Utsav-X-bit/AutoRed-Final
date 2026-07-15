@@ -94,17 +94,37 @@ VLLM_USE_V1=0 AUTORED_UPDATE_KB=off python experiment/llama_3_8b_vllm.py --mode 
 
 ```bash
 # Server (loads models on startup unless disabled)
-AUTORED_SERVER_MODE=1 python -m server.main
+AUTORED_SERVER_MODE=1 python -m uvicorn server.main:app
 
 # Or skip model loading and just browse runs
-AUTORED_SERVER_MODE=1 AUTORED_LOAD_MODELS=0 python -m server.main
+AUTORED_SERVER_MODE=1 AUTORED_LOAD_MODELS=0 python -m uvicorn server.main:app
 
 # Frontend dev server
 cd ui
+npm install
 npm run dev
 ```
 
 Server endpoints include `/api/runs`, `/api/benchmarks/{id}`, `/api/run/{run_id}`, WebSocket on `/ws/run/{run_id}`, and CSV/HTML exports on `/api/export/{run_id}/csv` and `/api/export/{run_id}/html`.
+
+### Local viewing without GPU
+
+For a laptop/local workstation that only needs to browse existing runs (no model inference):
+
+```bash
+pip install -r requirements_local.txt
+
+cd ui && npm install
+
+# In one terminal: start the backend without loading models
+AUTORED_LOAD_MODELS=0 python -m uvicorn server.main:app --host 127.0.0.1 --port 8000
+
+# In another terminal: start the Vite dev server
+cd ui
+npm run dev
+```
+
+`requirements_local.txt` excludes `torch`, `vLLM`, `transformers`, `sentence-transformers`, CUDA wheels, and the rest of the HPC training stack; it only installs FastAPI, uvicorn, and their runtime dependencies.
 
 ## Important Runtime Quirks
 
