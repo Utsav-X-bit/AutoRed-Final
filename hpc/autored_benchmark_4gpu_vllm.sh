@@ -14,14 +14,60 @@
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
 
-NUM_ROUNDS=${1:-1000}
-PLANNER_PATH=${2:-"experiment/results/planner_sft_v2_contract_anchor/checkpoint-27"}
-GENERATOR_PATH=${3:-"experiment/results/generator_sft_v2"}
-BASE_GENERATOR_PATH=${4:-"Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"}
-DATASET_PATH=${5:-"data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_deterministic_or_indirect.jsonl"}
+# Defaults
+NUM_ROUNDS=1000
+PLANNER_PATH="experiment/results/planner_sft_v2_contract_anchor/checkpoint-27"
+GENERATOR_PATH="experiment/results/generator_sft_v2"
+BASE_GENERATOR_PATH="Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"
+DATASET_PATH="data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_deterministic_or_indirect.jsonl"
 NUM_GPUS=4
-DATASET_SIZE=${6:-1000}
-OUTPUT_DIR=${7:-"results/benchmarks/batched_${NUM_ROUNDS}r_4gpu"}
+DATASET_SIZE=1000
+MAX_ATTEMPTS=20
+OUTPUT_DIR=""
+VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
+START_IDX=""
+TRUST_REMOTE_CODE=0
+
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --rounds N                 Total benchmark rounds across all GPUs (default: 1000)"
+    echo "  --planner-path PATH        Planner model path or LoRA adapter"
+    echo "  --generator-path PATH      Generator model path or LoRA adapter"
+    echo "  --base-generator-path PATH Base model for LoRA adapters"
+    echo "  --dataset-path PATH        Path to defense dataset JSONL"
+    echo "  --dataset-size N           Number of scenarios to load from dataset (default: 1000)"
+    echo "  --output-dir PATH          Directory for per-worker and merged results"
+    echo "  --victim-model-id ID       Hugging Face model id for victim LLM (default: meta-llama/Meta-Llama-3-8B-Instruct)"
+    echo "  --start-idx N              Zero-based start index for deterministic benchmark slice"
+    echo "  --attempts N               Maximum attack attempts per scenario (default: 20)"
+    echo "  --max-attempts N           Alias for --attempts"
+    echo "  --trust-remote-code        Trust remote modeling code for the victim LLM"
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --rounds) NUM_ROUNDS="$2"; shift 2 ;;
+        --planner-path) PLANNER_PATH="$2"; shift 2 ;;
+        --generator-path) GENERATOR_PATH="$2"; shift 2 ;;
+        --base-generator-path) BASE_GENERATOR_PATH="$2"; shift 2 ;;
+        --dataset-path) DATASET_PATH="$2"; shift 2 ;;
+        --dataset-size) DATASET_SIZE="$2"; shift 2 ;;
+        --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+        --victim-model-id) VICTIM_MODEL_ID="$2"; shift 2 ;;
+        --start-idx) START_IDX="$2"; shift 2 ;;
+        --attempts|--max-attempts) MAX_ATTEMPTS="$2"; shift 2 ;;
+        --trust-remote-code) TRUST_REMOTE_CODE=1; shift ;;
+        --help|-h) usage ;;
+        *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+if [ -z "$OUTPUT_DIR" ]; then
+    OUTPUT_DIR="results/benchmarks/batched_${NUM_ROUNDS}r_4gpu"
+fi
 
 # Project root
 PROJECT_ROOT="/nlsasfs/home/isea/isea38/AutoRed-Final"
@@ -33,6 +79,9 @@ source "$PROJECT_ROOT/.venv/bin/activate"
 # Offline mode (models pre-downloaded on HPC)
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
+
+# vLLM engine version (V0 is required by this runtime)
+export VLLM_USE_V1=0
 
 # =============================================================================
 # Setup
@@ -49,6 +98,18 @@ echo "Planner      : $PLANNER_PATH"
 echo "Generator    : $GENERATOR_PATH"
 if [ -n "$BASE_GENERATOR_PATH" ]; then
     echo "Base Model   : $BASE_GENERATOR_PATH"
+fi
+if [ -n "$DATASET_PATH" ]; then
+    echo "Dataset      : $DATASET_PATH"
+fi
+echo "Dataset Size : $DATASET_SIZE"
+echo "Victim Model : $VICTIM_MODEL_ID"
+if [ -n "$START_IDX" ]; then
+    echo "Start Idx    : $START_IDX"
+fi
+echo "Max Attempts : $MAX_ATTEMPTS"
+if [ "$TRUST_REMOTE_CODE" -eq 1 ]; then
+    echo "Trust Remote : yes"
 fi
 echo "Output Dir   : $OUTPUT_DIR"
 echo "============================================="
@@ -72,13 +133,17 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         --mode benchmark \
         --rounds "$NUM_ROUNDS" \
         --dataset-size "$DATASET_SIZE" \
+        --attempts "$MAX_ATTEMPTS" \
         --benchmark-output "$WORKER_OUTPUT" \
         --worker-id "$WORKER_ID" \
         --num-workers "$NUM_GPUS" \
         --planner-path "$PLANNER_PATH" \
         --generator-path "$GENERATOR_PATH" \
+        --victim-model-id "$VICTIM_MODEL_ID" \
+        $( [ "$TRUST_REMOTE_CODE" -eq 1 ] && echo "--trust-remote-code" ) \
         $( [ -n "$BASE_GENERATOR_PATH" ] && echo "--base-generator-path $BASE_GENERATOR_PATH" ) \
         $( [ -n "$DATASET_PATH" ] && echo "--dataset-path $DATASET_PATH" ) \
+        $( [ -n "$START_IDX" ] && echo "--start-idx $START_IDX" ) \
         > "$WORKER_LOG" 2>&1 &
 
     PIDS+=($!)

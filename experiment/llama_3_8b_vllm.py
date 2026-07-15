@@ -148,6 +148,11 @@ LLAMA_PATH = os.environ.get(
     "AUTORED_VICTIM_MODEL_ID", "meta-llama/Meta-Llama-3-8B-Instruct"
 )
 
+# Some Hugging Face models (e.g. internlm/internlm2-chat-7b) ship custom Python
+# modeling/tokenizer files. Set this flag (or AUTORED_TRUST_REMOTE_CODE=1) to
+# allow their execution when loading the victim LLM.
+_TRUST_REMOTE_CODE = os.environ.get("AUTORED_TRUST_REMOTE_CODE", "0") == "1"
+
 # Where to save the full trace log
 TRACE_LOG_PATH = "./tmp/autored_verbose_trace.json"
 BENCHMARK_LOG_PATH = "./tmp/autored_benchmark_results.json"
@@ -188,6 +193,7 @@ def _load_models():
     t0 = time.time()
     llama_model = LLM(
         model=LLAMA_PATH,
+        trust_remote_code=_TRUST_REMOTE_CODE,
         gpu_memory_utilization=0.50,   # v4.1: bumped from 0.47 for larger KV cache
         tensor_parallel_size=1,
         max_model_len=4096,            # Keep at 4096 to prevent decoder prompt length errors
@@ -806,9 +812,9 @@ class CTFEnvironment:
     and success detection. Matches paper Section III.A + V.A.
     """
 
-    def __init__(self, scenario: DefenseScenario, max_steps: int = MAX_INTERACTIONS):
+    def __init__(self, scenario: DefenseScenario, max_steps: Optional[int] = None):
         self.scenario = scenario
-        self.max_steps = max_steps
+        self.max_steps = max_steps if max_steps is not None else MAX_INTERACTIONS
         self.current_step = 0
         self.done = False
         self.success = False
@@ -3176,8 +3182,10 @@ class RedTeamingAgent:
 def verbose_test_llama(
     scenario: DefenseScenario,
     agent: RedTeamingAgent,
-    max_attempts: int = MAX_INTERACTIONS,
+    max_attempts: Optional[int] = None,
 ) -> tuple:
+    if max_attempts is None:
+        max_attempts = MAX_INTERACTIONS
     """
     Run the AutoRed attack loop with FULL step-by-step logging.
 
@@ -5286,6 +5294,26 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help=(
+            "Trust remote code when loading the victim model. "
+            "Required for some models such as internlm/internlm2-chat-7b. "
+            "Can also be enabled with AUTORED_TRUST_REMOTE_CODE=1."
+        ),
+    )
+    parser.add_argument(
+        "--attempts",
+        "--max-attempts",
+        dest="max_attempts",
+        type=int,
+        default=MAX_INTERACTIONS,
+        help=(
+            "Maximum attack attempts per scenario "
+            f"(default: {MAX_INTERACTIONS})."
+        ),
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=1,
@@ -5308,8 +5336,11 @@ if __name__ == "__main__":
     BASE_GENERATOR_PATH = args.base_generator_path
     BENCHMARK_LOG_PATH = args.benchmark_output
 
-    # Allow the victim model id to be overridden on the command line.
+    # Allow the victim model id, max attempts, and remote-code trust to be
+    # overridden on the CLI.
     LLAMA_PATH = args.victim_model_id
+    MAX_INTERACTIONS = args.max_attempts
+    _TRUST_REMOTE_CODE = args.trust_remote_code or _TRUST_REMOTE_CODE
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:

@@ -32,7 +32,7 @@ Key environmental quirks:
 
 - **Always set `VLLM_USE_V1=0`** before running the runtime. The code expects the vLLM V0 engine; V1 triggers `torch.compile` and extra GPU memory use that usually OOMs.
 - **CUDA is required.** The runtime loads `meta-llama/Meta-Llama-3-8B-Instruct` and `Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2` through vLLM.
-- The victim/target LLM defaults to `meta-llama/Meta-Llama-3-8B-Instruct`. Override with `--victim-model-id <hf-model-id>` (runtime CLI) or `AUTORED_VICTIM_MODEL_ID` (server / worker processes).
+- The victim/target LLM defaults to `meta-llama/Meta-Llama-3-8B-Instruct`. Override with `--victim-model-id <hf-model-id>` (runtime CLI) or `AUTORED_VICTIM_MODEL_ID` (server / worker processes). Models that ship custom Python code (e.g. `internlm/internlm2-chat-7b`) also require `--trust-remote-code` (or `AUTORED_TRUST_REMOTE_CODE=1`).
 - **GPU-heavy work belongs on the HPC cluster.** Single experiments, benchmarks, extractor benchmarks, and any command that loads vLLM / CUDA models are meant to run on the cluster. Do not run them on a local workstation. Local machines should only be used for model-free workflows (UI development, backend browsing with `AUTORED_LOAD_MODELS=0`, or parsing/merging scripts).
 - For offline/air-gapped HPC runs: set `TRANSFORMERS_OFFLINE=1` and `HF_HUB_OFFLINE=1`.
 
@@ -72,6 +72,25 @@ python scripts/merge_benchmarks.py \
 The 4-GPU batched benchmark is orchestrated by `hpc/autored_benchmark_4gpu_vllm.sh` (note the hardcoded `PROJECT_ROOT=/nlsasfs/home/isea/isea38/AutoRed-Final`; change it for your cluster).
 
 To benchmark a deterministic slice of the loaded dataset instead of a random sample, add `--start-idx N` (0-based, inclusive). For example, `--start-idx 1000 --rounds 1000` processes indices 1000-1999. If `--start-idx` is omitted, the benchmark falls back to random sampling as before.
+
+The HPC wrapper `hpc/autored_benchmark_4gpu_vllm.sh` now takes named options for every parameter:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 ./hpc/autored_benchmark_4gpu_vllm.sh \
+  --rounds 1000 \
+  --planner-path experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
+  --generator-path experiment/results/generator_sft_v2 \
+  --base-generator-path Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
+  --dataset-path data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_deterministic_or_indirect.jsonl \
+  --dataset-size 1000 \
+  --output-dir results/benchmarks/Mistral_subset2_$(date +%F_%H-%M-%S)_4g \
+  --victim-model-id internlm/internlm2-chat-7b \
+  --trust-remote-code \
+  --start-idx 0 \
+  --attempts 20
+```
+
+If `--output-dir` is omitted, it defaults to `results/benchmarks/batched_${NUM_ROUNDS}r_4gpu`. `--attempts` (alias `--max-attempts`) controls the per-scenario attempt limit and defaults to 20. Use `--trust-remote-code` for models such as `internlm/internlm2-chat-7b` that ship custom Python files.
 
 ### Auto-update KB / DB / RAG
 
