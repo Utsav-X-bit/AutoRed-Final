@@ -544,15 +544,14 @@ def _load_lora_role_model(
     is_lora_adapter = (Path(ckpt_path) / "adapter_config.json").exists()
 
     if not is_lora_adapter:
-        print(f"[LOAD] {role_name} path is a full model; loading standalone vLLM instance")
-        model = LLM(
-            model=ckpt_path,
-            gpu_memory_utilization=0.48,
-            tensor_parallel_size=1,
-            max_model_len=4096,
-            enforce_eager=False,
+        # Load the full model as the shared base so that a later LoRA role
+        # (e.g. the generator when the planner was pre-merged) can reuse it
+        # instead of creating a second 8B vLLM instance and OOMing the GPU.
+        print(
+            f"[LOAD] {role_name} path is a full model; "
+            "loading it as the shared LoRA base"
         )
-        tokenizer = model.get_tokenizer()
+        tokenizer, model = _load_shared_lora_base(ckpt_path)
         MODEL_LOAD_TIME[role_name.lower()] = time.time() - t0
         print(f"[LOAD] ✓ {role_name} loaded ({MODEL_LOAD_TIME[role_name.lower()]:.1f}s)")
         return tokenizer, model
