@@ -138,7 +138,7 @@ GIT_COMMIT = get_git_commit()
 # HARDCODED PATHS (Relative to project root for portability)
 # =============================================================================
 
-DISTILBERT_CKPT = "pre_trained/pi_reward_model"
+DISTILBERT_CKPT = "AR_pre_trained/pi_reward_model"
 DISTILBERT_BASE = "distilbert-base-uncased"
 STRATEGY_CKPT = "experiment/strategy_predictor.pth"
 DATA_PATH = "experiment/raw_dump_defenses.jsonl.bz2"
