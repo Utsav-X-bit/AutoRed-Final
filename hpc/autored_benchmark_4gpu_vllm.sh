@@ -27,6 +27,7 @@ OUTPUT_DIR=""
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
 TRUST_REMOTE_CODE=0
+TOKENIZER_MODE="auto"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -44,6 +45,7 @@ usage() {
     echo "  --attempts N               Maximum attack attempts per scenario (default: 20)"
     echo "  --max-attempts N           Alias for --attempts"
     echo "  --trust-remote-code        Trust remote modeling code for the victim LLM"
+    echo "  --tokenizer-mode MODE      vLLM tokenizer mode (default: auto; use 'mistral' for Mistral models)"
     exit 0
 }
 
@@ -60,6 +62,7 @@ while [[ $# -gt 0 ]]; do
         --start-idx) START_IDX="$2"; shift 2 ;;
         --attempts|--max-attempts) MAX_ATTEMPTS="$2"; shift 2 ;;
         --trust-remote-code) TRUST_REMOTE_CODE=1; shift ;;
+        --tokenizer-mode) TOKENIZER_MODE="$2"; shift 2 ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -111,6 +114,7 @@ echo "Max Attempts : $MAX_ATTEMPTS"
 if [ "$TRUST_REMOTE_CODE" -eq 1 ]; then
     echo "Trust Remote : yes"
 fi
+echo "Tokenizer Mode: $TOKENIZER_MODE"
 echo "Output Dir   : $OUTPUT_DIR"
 echo "============================================="
 
@@ -141,6 +145,7 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         --generator-path "$GENERATOR_PATH" \
         --victim-model-id "$VICTIM_MODEL_ID" \
         $( [ "$TRUST_REMOTE_CODE" -eq 1 ] && echo "--trust-remote-code" ) \
+        --tokenizer-mode "$TOKENIZER_MODE" \
         $( [ -n "$BASE_GENERATOR_PATH" ] && echo "--base-generator-path $BASE_GENERATOR_PATH" ) \
         $( [ -n "$DATASET_PATH" ] && echo "--dataset-path $DATASET_PATH" ) \
         $( [ -n "$START_IDX" ] && echo "--start-idx $START_IDX" ) \

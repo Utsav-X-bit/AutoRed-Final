@@ -80,6 +80,7 @@ if not hasattr(PreTrainedTokenizerFast, "all_special_tokens_extended"):
 
 from vllm import LLM, SamplingParams
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
@@ -153,6 +154,45 @@ LLAMA_PATH = os.environ.get(
 # allow their execution when loading the victim LLM.
 _TRUST_REMOTE_CODE = os.environ.get("AUTORED_TRUST_REMOTE_CODE", "0") == "1"
 
+# vLLM tokenizer mode for the victim model. "mistral" is strongly recommended
+# for Mistral-family models; defaults to "auto".
+_TOKENIZER_MODE = os.environ.get("AUTORED_TOKENIZER_MODE", "auto")
+
+
+def _sanitize_victim_config(model_path: str) -> None:
+    """Patch head_dim into the cached config when it is unset.
+
+    Some vLLM releases crash on Mistral-type configs where `head_dim` is absent
+    or explicitly null, because LlamaAttention does `num_heads * head_dim`.
+    Adding a sensible `head_dim = hidden_size // num_attention_heads` keeps
+    those models loadable without manual cache edits.
+    """
+    try:
+        from transformers.utils.hub import cached_file
+
+        config = AutoConfig.from_pretrained(
+            model_path, trust_remote_code=_TRUST_REMOTE_CODE
+        )
+        head_dim = getattr(config, "head_dim", None)
+        if head_dim is not None:
+            return
+        hidden_size = getattr(config, "hidden_size", None)
+        num_heads = getattr(
+            config, "num_attention_heads", getattr(config, "num_heads", None)
+        )
+        if hidden_size is None or num_heads is None or num_heads == 0:
+            return
+        config.head_dim = hidden_size // num_heads
+
+        config_path = cached_file(model_path, "config.json", local_files_only=True)
+        if config_path is not None:
+            config.to_json_file(config_path)
+            print(
+                f"[CONFIG] Patched head_dim={config.head_dim} in {config_path}"
+            )
+    except Exception as e:
+        print(f"[WARN] Could not sanitize victim config: {e}")
+
 # Where to save the full trace log
 TRACE_LOG_PATH = "./tmp/autored_verbose_trace.json"
 BENCHMARK_LOG_PATH = "./tmp/autored_benchmark_results.json"
@@ -190,10 +230,12 @@ def _load_models():
 
     # ---- victim (default Llama-3-8B-Instruct via vLLM) ----
     print(f"\n[LOAD] Loading {LLAMA_PATH} (target LLM)...")
+    _sanitize_victim_config(LLAMA_PATH)
     t0 = time.time()
     llama_model = LLM(
         model=LLAMA_PATH,
         trust_remote_code=_TRUST_REMOTE_CODE,
+        tokenizer_mode=_TOKENIZER_MODE,
         gpu_memory_utilization=0.50,   # v4.1: bumped from 0.47 for larger KV cache
         tensor_parallel_size=1,
         max_model_len=4096,            # Keep at 4096 to prevent decoder prompt length errors
@@ -5303,6 +5345,16 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--tokenizer-mode",
+        type=str,
+        default=_TOKENIZER_MODE,
+        help=(
+            "vLLM tokenizer mode for the victim model. "
+            "Use 'mistral' for Mistral-family models. "
+            "Can also be set with AUTORED_TOKENIZER_MODE."
+        ),
+    )
+    parser.add_argument(
         "--attempts",
         "--max-attempts",
         dest="max_attempts",
@@ -5336,11 +5388,15 @@ if __name__ == "__main__":
     BASE_GENERATOR_PATH = args.base_generator_path
     BENCHMARK_LOG_PATH = args.benchmark_output
 
-    # Allow the victim model id, max attempts, and remote-code trust to be
-    # overridden on the CLI.
+    # Allow the victim model id, max attempts, remote-code trust, and tokenizer
+    # mode to be overridden on the CLI.
     LLAMA_PATH = args.victim_model_id
     MAX_INTERACTIONS = args.max_attempts
     _TRUST_REMOTE_CODE = args.trust_remote_code or _TRUST_REMOTE_CODE
+    _TOKENIZER_MODE = args.tokenizer_mode
+    # vLLM recommends 'mistral' tokenizer mode for Mistral-family models.
+    if _TOKENIZER_MODE == "auto" and "mistral" in LLAMA_PATH.lower():
+        _TOKENIZER_MODE = "mistral"
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:
