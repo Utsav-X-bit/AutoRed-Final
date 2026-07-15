@@ -519,7 +519,7 @@ def _load_shared_lora_base(base_model_path: str):
         lora_extra_vocab_size=256,
         gpu_memory_utilization=0.50,
         tensor_parallel_size=1,
-        max_model_len=2048,
+        max_model_len=4096,
         enforce_eager=False,
     )
     shared_lora_tokenizer = shared_lora_model.get_tokenizer()
@@ -2443,19 +2443,31 @@ def inference_llm_verbose_batch(
         }
         if lora_request is not None:
             generate_kwargs["lora_request"] = lora_request
-        outputs = model.generate(prompts, sampling_params=sampling_params, **generate_kwargs)
-        for i, out in enumerate(outputs):
-            generated = out.outputs[0].text.strip()
-            if not generated or len(generated) < 3:
-                generated = f"[EMPTY - {label} produced only whitespace]"
-            results.append(
-                {
-                    "internal_prompt": prompt_texts[i],
-                    "input_tokens": len(out.prompt_token_ids),
-                    "generated_attack": generated,
-                    "output_tokens": len(out.outputs[0].token_ids),
-                }
+
+        # Chunk planner generation to avoid KV-cache preemption when many
+        # scenarios are processed at once. The planner prompt+output is short,
+        # but 50 concurrent 4096-len sequences can exhaust KV cache.
+        chunk_size = 16 if label == "planner" else len(prompts)
+        for chunk_start in range(0, len(prompts), chunk_size):
+            chunk_prompts = prompts[chunk_start : chunk_start + chunk_size]
+            chunk_outputs = model.generate(
+                chunk_prompts,
+                sampling_params=sampling_params,
+                **generate_kwargs,
             )
+            for i, out in enumerate(chunk_outputs):
+                global_i = chunk_start + i
+                generated = out.outputs[0].text.strip()
+                if not generated or len(generated) < 3:
+                    generated = f"[EMPTY - {label} produced only whitespace]"
+                results.append(
+                    {
+                        "internal_prompt": prompt_texts[global_i],
+                        "input_tokens": len(out.prompt_token_ids),
+                        "generated_attack": generated,
+                        "output_tokens": len(out.outputs[0].token_ids),
+                    }
+                )
     else:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -2724,7 +2736,7 @@ class RedTeamingAgent:
             self.planner_model,
             self.planner_tokenizer,
             [prompt_text],
-            temperature=0.1,
+            temperature=0.0,
             top_p=1.0,
             max_tokens=256,
             lora_request=planner_lora_request,
@@ -4637,7 +4649,7 @@ def generate_attack_batch(
         agents[0].planner_model,
         agents[0].planner_tokenizer,
         planner_prompts,
-        temperature=0.1,
+        temperature=0.0,
         top_p=1.0,
         max_tokens=256,
         lora_request=planner_lora_request,
