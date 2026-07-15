@@ -159,6 +159,12 @@ _TRUST_REMOTE_CODE = os.environ.get("AUTORED_TRUST_REMOTE_CODE", "0") == "1"
 # for Mistral-family models; defaults to "auto".
 _TOKENIZER_MODE = os.environ.get("AUTORED_TOKENIZER_MODE", "auto")
 
+# Fraction of GPU memory vLLM will reserve for the victim LLM. Lower this if
+# loading the DistilBERT judge/access-code predictor causes OOM.
+_GPU_MEMORY_UTILIZATION = float(
+    os.environ.get("AUTORED_GPU_MEMORY_UTILIZATION", "0.50")
+)
+
 
 def _sanitize_victim_config(model_path: str) -> None:
     """Patch head_dim into the cached config when it is unset.
@@ -260,7 +266,7 @@ def _load_models():
         model=LLAMA_PATH,
         trust_remote_code=_TRUST_REMOTE_CODE,
         tokenizer_mode=_TOKENIZER_MODE,
-        gpu_memory_utilization=0.50,   # v4.1: bumped from 0.47 for larger KV cache
+        gpu_memory_utilization=_GPU_MEMORY_UTILIZATION,
         tensor_parallel_size=1,
         max_model_len=4096,            # Keep at 4096 to prevent decoder prompt length errors
         enforce_eager=False,
@@ -5397,6 +5403,17 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=_GPU_MEMORY_UTILIZATION,
+        help=(
+            "Fraction of GPU memory vLLM reserves for the victim LLM "
+            f"(default: {_GPU_MEMORY_UTILIZATION}). Lower this if the "
+            "judge/access-code predictor OOMs. Can also be set with "
+            "AUTORED_GPU_MEMORY_UTILIZATION."
+        ),
+    )
+    parser.add_argument(
         "--attempts",
         "--max-attempts",
         dest="max_attempts",
@@ -5430,12 +5447,13 @@ if __name__ == "__main__":
     BASE_GENERATOR_PATH = args.base_generator_path
     BENCHMARK_LOG_PATH = args.benchmark_output
 
-    # Allow the victim model id, max attempts, remote-code trust, and tokenizer
-    # mode to be overridden on the CLI.
+    # Allow the victim model id, max attempts, remote-code trust, tokenizer
+    # mode, and GPU memory fraction to be overridden on the CLI.
     LLAMA_PATH = args.victim_model_id
     MAX_INTERACTIONS = args.max_attempts
     _TRUST_REMOTE_CODE = args.trust_remote_code or _TRUST_REMOTE_CODE
     _TOKENIZER_MODE = args.tokenizer_mode
+    _GPU_MEMORY_UTILIZATION = args.gpu_memory_utilization
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:

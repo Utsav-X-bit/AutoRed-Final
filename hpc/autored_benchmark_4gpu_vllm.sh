@@ -23,6 +23,7 @@ DATASET_PATH="data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_determi
 NUM_GPUS=4
 DATASET_SIZE=1000
 MAX_ATTEMPTS=20
+GPU_MEMORY_UTILIZATION=0.50
 OUTPUT_DIR=""
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
@@ -46,6 +47,7 @@ usage() {
     echo "  --max-attempts N           Alias for --attempts"
     echo "  --trust-remote-code        Trust remote modeling code for the victim LLM"
     echo "  --tokenizer-mode MODE      vLLM tokenizer mode (default: auto; use 'mistral' for newer Mistral tokenizer files)"
+    echo "  --gpu-memory-utilization F vLLM GPU memory fraction, e.g. 0.45 (default: 0.50)"
     exit 0
 }
 
@@ -63,6 +65,7 @@ while [[ $# -gt 0 ]]; do
         --attempts|--max-attempts) MAX_ATTEMPTS="$2"; shift 2 ;;
         --trust-remote-code) TRUST_REMOTE_CODE=1; shift ;;
         --tokenizer-mode) TOKENIZER_MODE="$2"; shift 2 ;;
+        --gpu-memory-utilization) GPU_MEMORY_UTILIZATION="$2"; shift 2 ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -115,6 +118,7 @@ if [ "$TRUST_REMOTE_CODE" -eq 1 ]; then
     echo "Trust Remote : yes"
 fi
 echo "Tokenizer Mode: $TOKENIZER_MODE"
+echo "GPU Memory   : $GPU_MEMORY_UTILIZATION"
 echo "Output Dir   : $OUTPUT_DIR"
 echo "============================================="
 
@@ -138,6 +142,7 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         --rounds "$NUM_ROUNDS" \
         --dataset-size "$DATASET_SIZE" \
         --attempts "$MAX_ATTEMPTS" \
+        --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
         --benchmark-output "$WORKER_OUTPUT" \
         --worker-id "$WORKER_ID" \
         --num-workers "$NUM_GPUS" \

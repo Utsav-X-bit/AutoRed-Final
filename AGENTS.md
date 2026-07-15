@@ -36,6 +36,7 @@ Key environmental quirks:
 - **GPU-heavy work belongs on the HPC cluster.** Single experiments, benchmarks, extractor benchmarks, and any command that loads vLLM / CUDA models are meant to run on the cluster. Do not run them on a local workstation. Local machines should only be used for model-free workflows (UI development, backend browsing with `AUTORED_LOAD_MODELS=0`, or parsing/merging scripts).
 - For offline/air-gapped HPC runs: set `TRANSFORMERS_OFFLINE=1` and `HF_HUB_OFFLINE=1`.
 - If vLLM fails during memory profiling with `AssertionError: Error in memory profiling`, try `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` or `export AUTORED_SKIP_VLLM_MEMORY_PROFILE=1` before launching. The latter disables the memory-increase assertion inside vLLM's worker.
+- If the DistilBERT judge / access-code predictor OOMs after the victim LLM loads, lower vLLM's GPU memory fraction with `--gpu-memory-utilization 0.45` (or `AUTORED_GPU_MEMORY_UTILIZATION=0.45`). The default is `0.50`.
 
 ## Running the System
 
