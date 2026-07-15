@@ -35,6 +35,7 @@ Key environmental quirks:
 - The victim/target LLM defaults to `meta-llama/Meta-Llama-3-8B-Instruct`. Override with `--victim-model-id <hf-model-id>` (runtime CLI) or `AUTORED_VICTIM_MODEL_ID` (server / worker processes). Models that ship custom Python code (e.g. `internlm/internlm2-chat-7b`) also require `--trust-remote-code` (or `AUTORED_TRUST_REMOTE_CODE=1`). For newer Mistral checkpoints that ship the Mistral-format tokenizer files, set `--tokenizer-mode mistral` (or `AUTORED_TOKENIZER_MODE=mistral`); otherwise leave it as `auto`.
 - **GPU-heavy work belongs on the HPC cluster.** Single experiments, benchmarks, extractor benchmarks, and any command that loads vLLM / CUDA models are meant to run on the cluster. Do not run them on a local workstation. Local machines should only be used for model-free workflows (UI development, backend browsing with `AUTORED_LOAD_MODELS=0`, or parsing/merging scripts).
 - For offline/air-gapped HPC runs: set `TRANSFORMERS_OFFLINE=1` and `HF_HUB_OFFLINE=1`.
+- If vLLM fails during memory profiling with `AssertionError: Error in memory profiling`, try `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` or `export AUTORED_SKIP_VLLM_MEMORY_PROFILE=1` before launching. The latter disables the memory-increase assertion inside vLLM's worker.
 
 ## Running the System
 

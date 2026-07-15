@@ -228,6 +228,29 @@ def _load_models():
         print("[LOAD] Server mode — skipping model load")
         return
 
+    # vLLM's memory profiling can be tripped up by a stale CUDA allocator state
+    # from earlier torch imports or aborted runs. Empty the cache and, if the
+    # user opts in, skip the post-profiling memory-increase assertion.
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+    if os.environ.get("AUTORED_SKIP_VLLM_MEMORY_PROFILE", "0") == "1":
+        try:
+            from vllm.worker.worker import Worker
+
+            def _assert_memory_footprint_increased_during_profiling(self):
+                pass
+
+            Worker._assert_memory_footprint_increased_during_profiling = (
+                _assert_memory_footprint_increased_during_profiling
+            )
+            print("[CONFIG] Skipping vLLM memory profiling assertion")
+        except Exception as e:
+            print(f"[WARN] Could not disable vLLM memory profiling assertion: {e}")
+
     # ---- victim (default Llama-3-8B-Instruct via vLLM) ----
     print(f"\n[LOAD] Loading {LLAMA_PATH} (target LLM)...")
     _sanitize_victim_config(LLAMA_PATH)
