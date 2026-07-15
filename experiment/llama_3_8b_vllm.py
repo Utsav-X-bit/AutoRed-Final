@@ -5394,9 +5394,6 @@ if __name__ == "__main__":
     MAX_INTERACTIONS = args.max_attempts
     _TRUST_REMOTE_CODE = args.trust_remote_code or _TRUST_REMOTE_CODE
     _TOKENIZER_MODE = args.tokenizer_mode
-    # vLLM recommends 'mistral' tokenizer mode for Mistral-family models.
-    if _TOKENIZER_MODE == "auto" and "mistral" in LLAMA_PATH.lower():
-        _TOKENIZER_MODE = "mistral"
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:

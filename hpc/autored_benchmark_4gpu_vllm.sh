@@ -45,7 +45,7 @@ usage() {
     echo "  --attempts N               Maximum attack attempts per scenario (default: 20)"
     echo "  --max-attempts N           Alias for --attempts"
     echo "  --trust-remote-code        Trust remote modeling code for the victim LLM"
-    echo "  --tokenizer-mode MODE      vLLM tokenizer mode (default: auto; use 'mistral' for Mistral models)"
+    echo "  --tokenizer-mode MODE      vLLM tokenizer mode (default: auto; use 'mistral' for newer Mistral tokenizer files)"
     exit 0
 }
 

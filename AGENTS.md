@@ -32,7 +32,7 @@ Key environmental quirks:
 
 - **Always set `VLLM_USE_V1=0`** before running the runtime. The code expects the vLLM V0 engine; V1 triggers `torch.compile` and extra GPU memory use that usually OOMs.
 - **CUDA is required.** The runtime loads `meta-llama/Meta-Llama-3-8B-Instruct` and `Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2` through vLLM.
-- The victim/target LLM defaults to `meta-llama/Meta-Llama-3-8B-Instruct`. Override with `--victim-model-id <hf-model-id>` (runtime CLI) or `AUTORED_VICTIM_MODEL_ID` (server / worker processes). Models that ship custom Python code (e.g. `internlm/internlm2-chat-7b`) also require `--trust-remote-code` (or `AUTORED_TRUST_REMOTE_CODE=1`). For Mistral-family models, use `--tokenizer-mode mistral` or set `AUTORED_TOKENIZER_MODE=mistral`.
+- The victim/target LLM defaults to `meta-llama/Meta-Llama-3-8B-Instruct`. Override with `--victim-model-id <hf-model-id>` (runtime CLI) or `AUTORED_VICTIM_MODEL_ID` (server / worker processes). Models that ship custom Python code (e.g. `internlm/internlm2-chat-7b`) also require `--trust-remote-code` (or `AUTORED_TRUST_REMOTE_CODE=1`). For newer Mistral checkpoints that ship the Mistral-format tokenizer files, set `--tokenizer-mode mistral` (or `AUTORED_TOKENIZER_MODE=mistral`); otherwise leave it as `auto`.
 - **GPU-heavy work belongs on the HPC cluster.** Single experiments, benchmarks, extractor benchmarks, and any command that loads vLLM / CUDA models are meant to run on the cluster. Do not run them on a local workstation. Local machines should only be used for model-free workflows (UI development, backend browsing with `AUTORED_LOAD_MODELS=0`, or parsing/merging scripts).
 - For offline/air-gapped HPC runs: set `TRANSFORMERS_OFFLINE=1` and `HF_HUB_OFFLINE=1`.
 
@@ -90,7 +90,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ./hpc/autored_benchmark_4gpu_vllm.sh \
   --attempts 20
 ```
 
-If `--output-dir` is omitted, it defaults to `results/benchmarks/batched_${NUM_ROUNDS}r_4gpu`. `--attempts` (alias `--max-attempts`) controls the per-scenario attempt limit and defaults to 20. Use `--trust-remote-code` for models such as `internlm/internlm2-chat-7b` that ship custom Python files. Use `--tokenizer-mode mistral` for Mistral-family models.
+If `--output-dir` is omitted, it defaults to `results/benchmarks/batched_${NUM_ROUNDS}r_4gpu`. `--attempts` (alias `--max-attempts`) controls the per-scenario attempt limit and defaults to 20. Use `--trust-remote-code` for models such as `internlm/internlm2-chat-7b` that ship custom Python files. Use `--tokenizer-mode mistral` only for newer Mistral checkpoints that ship Mistral-format tokenizer files; otherwise leave it as `auto`.
 
 ### Auto-update KB / DB / RAG
 
