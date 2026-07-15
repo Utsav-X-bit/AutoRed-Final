@@ -102,6 +102,12 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+# Make project-root imports work inside vLLM spawn workers, which start with a
+# fresh sys.path that may not include the project root.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 tqdm.pandas()
 
 # Auto-updater for KB / trajectory DB / RAG after runs and benchmarks.
@@ -511,9 +517,9 @@ def _load_shared_lora_base(base_model_path: str):
         max_loras=2,
         max_cpu_loras=8,
         lora_extra_vocab_size=256,
-        gpu_memory_utilization=0.48,
+        gpu_memory_utilization=0.50,
         tensor_parallel_size=1,
-        max_model_len=4096,
+        max_model_len=2048,
         enforce_eager=False,
     )
     shared_lora_tokenizer = shared_lora_model.get_tokenizer()

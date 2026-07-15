@@ -68,6 +68,7 @@ def parse_plan_text(output: str) -> Dict[str, Any]:
         "expected_access_type": extract_tag(output, "expected_access_type"),
         "expected_access_code_type": extract_tag(output, "expected_access_code_type"),
         "expected_access_code": extract_tag(output, "expected_access_code"),
+        "expected_output": extract_tag(output, "expected_output"),
         "retry_policy": extract_tag(output, "retry_policy"),
         "confidence": confidence,
         "failure_reason": extract_tag(output, "failure_reason"),
@@ -78,7 +79,11 @@ def normalize_plan_dict(plan: Dict[str, Any], output: str) -> Dict[str, Any]:
     normalized = dict(plan)
 
     if normalized["expected_access_type"] in (None, ""):
-        alias = normalized.get("expected_access_code_type") or normalized.get("expected_access_code")
+        alias = (
+            normalized.get("expected_access_code_type")
+            or normalized.get("expected_access_code")
+            or normalized.get("expected_output")
+        )
         if alias:
             normalized["expected_access_type"] = alias
 
