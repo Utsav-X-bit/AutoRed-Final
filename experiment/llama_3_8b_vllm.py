@@ -144,7 +144,9 @@ EXT_DATA_PATH = "data/autored_verified_v1.jsonl"
 PLANNER_PATH = "experiment/results/planner_sft_v2"
 GENERATOR_PATH = "Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"
 BASE_GENERATOR_PATH = "Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"
-LLAMA_PATH = "meta-llama/Meta-Llama-3-8B-Instruct"
+LLAMA_PATH = os.environ.get(
+    "AUTORED_VICTIM_MODEL_ID", "meta-llama/Meta-Llama-3-8B-Instruct"
+)
 
 # Where to save the full trace log
 TRACE_LOG_PATH = "./tmp/autored_verbose_trace.json"
@@ -181,8 +183,8 @@ def _load_models():
         print("[LOAD] Server mode — skipping model load")
         return
 
-    # ---- victim (Llama-3-8B-Instruct via vLLM) ----
-    print("\n[LOAD] Loading Llama-3-8B-Instruct (target LLM)...")
+    # ---- victim (default Llama-3-8B-Instruct via vLLM) ----
+    print(f"\n[LOAD] Loading {LLAMA_PATH} (target LLM)...")
     t0 = time.time()
     llama_model = LLM(
         model=LLAMA_PATH,
@@ -193,7 +195,7 @@ def _load_models():
     )
     llama_tokenizer = llama_model.get_tokenizer()
     MODEL_LOAD_TIME["victim"] = time.time() - t0
-    print(f"[LOAD] ✓ Llama-3-8B-Instruct loaded ({MODEL_LOAD_TIME['victim']:.1f}s)")
+    print(f"[LOAD] ✓ {LLAMA_PATH} loaded ({MODEL_LOAD_TIME['victim']:.1f}s)")
 
 
 def chat_with_llama_messages_batch(messages_batch: list) -> list:
@@ -3705,6 +3707,7 @@ def run_benchmark(
     verbose: bool = False,
     worker_id: int = 0,
     num_workers: int = 1,
+    start_idx: Optional[int] = None,
 ) -> dict:
     """
     Phase 7: Run benchmark matching paper evaluation protocol.
@@ -3768,7 +3771,29 @@ def run_benchmark(
     active_df = defense_df if defense_df is not None else defender_df
     pool_size = len(active_df)
 
-    if n_rounds > pool_size:
+    if start_idx is not None:
+        if start_idx < 0 or start_idx >= pool_size:
+            raise ValueError(
+                f"--start-idx ({start_idx}) is outside the dataset range [0, {pool_size - 1}]"
+            )
+        end_idx = min(start_idx + n_rounds, pool_size)
+        print(
+            f"\n  [BENCHMARK] Starting from index {start_idx}: "
+            f"scenarios {start_idx}-{end_idx - 1} ({end_idx - start_idx} rounds)"
+        )
+        scenarios_df = active_df.iloc[start_idx:end_idx].copy()
+        # Pad with replacement if the user explicitly asked for more rounds than available
+        if end_idx - start_idx < n_rounds:
+            shortfall = n_rounds - (end_idx - start_idx)
+            print(
+                f"\n  [WARN] Requested {n_rounds} rounds but only {end_idx - start_idx} "
+                f"available from index {start_idx}. Sampling {shortfall} additional scenarios with replacement."
+            )
+            extra = active_df.iloc[start_idx:end_idx].sample(
+                n=shortfall, random_state=42, replace=True
+            )
+            scenarios_df = pd.concat([scenarios_df, extra], ignore_index=True)
+    elif n_rounds > pool_size:
         print(
             f"\n  [WARN] Total rounds ({n_rounds}) > pool size ({pool_size}). "
             f"Sampling with replacement."
@@ -5189,6 +5214,17 @@ if __name__ == "__main__":
         help=f"Number of benchmark rounds (default: {BENCHMARK_ROUNDS})",
     )
     parser.add_argument(
+        "--start-idx",
+        type=int,
+        default=None,
+        help=(
+            "Zero-based starting index into the loaded dataset for benchmark mode. "
+            "If set, --rounds scenarios beginning at this index are used in order "
+            "(e.g. --start-idx 1000 --rounds 1000 processes indices 1000-1999). "
+            "If omitted, scenarios are sampled randomly."
+        ),
+    )
+    parser.add_argument(
         "--dataset-size",
         type=int,
         default=1000,
@@ -5241,6 +5277,15 @@ if __name__ == "__main__":
         help="Path to trained DeBERTa ranker",
     )
     parser.add_argument(
+        "--victim-model-id",
+        type=str,
+        default=LLAMA_PATH,
+        help=(
+            "Hugging Face model id for the victim/target LLM "
+            "(default: meta-llama/Meta-Llama-3-8B-Instruct)."
+        ),
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=1,
@@ -5262,6 +5307,9 @@ if __name__ == "__main__":
     GENERATOR_PATH = args.generator_path
     BASE_GENERATOR_PATH = args.base_generator_path
     BENCHMARK_LOG_PATH = args.benchmark_output
+
+    # Allow the victim model id to be overridden on the command line.
+    LLAMA_PATH = args.victim_model_id
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:
@@ -5414,4 +5462,5 @@ if __name__ == "__main__":
                 verbose=False,
                 worker_id=getattr(args, "worker_id", 0),
                 num_workers=getattr(args, "num_workers", 1),
+                start_idx=args.start_idx,
             )

@@ -32,6 +32,8 @@ Key environmental quirks:
 
 - **Always set `VLLM_USE_V1=0`** before running the runtime. The code expects the vLLM V0 engine; V1 triggers `torch.compile` and extra GPU memory use that usually OOMs.
 - **CUDA is required.** The runtime loads `meta-llama/Meta-Llama-3-8B-Instruct` and `Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2` through vLLM.
+- The victim/target LLM defaults to `meta-llama/Meta-Llama-3-8B-Instruct`. Override with `--victim-model-id <hf-model-id>` (runtime CLI) or `AUTORED_VICTIM_MODEL_ID` (server / worker processes).
+- **GPU-heavy work belongs on the HPC cluster.** Single experiments, benchmarks, extractor benchmarks, and any command that loads vLLM / CUDA models are meant to run on the cluster. Do not run them on a local workstation. Local machines should only be used for model-free workflows (UI development, backend browsing with `AUTORED_LOAD_MODELS=0`, or parsing/merging scripts).
 - For offline/air-gapped HPC runs: set `TRANSFORMERS_OFFLINE=1` and `HF_HUB_OFFLINE=1`.
 
 ## Running the System
@@ -68,6 +70,8 @@ python scripts/merge_benchmarks.py \
 ```
 
 The 4-GPU batched benchmark is orchestrated by `hpc/autored_benchmark_4gpu_vllm.sh` (note the hardcoded `PROJECT_ROOT=/nlsasfs/home/isea/isea38/AutoRed-Final`; change it for your cluster).
+
+To benchmark a deterministic slice of the loaded dataset instead of a random sample, add `--start-idx N` (0-based, inclusive). For example, `--start-idx 1000 --rounds 1000` processes indices 1000-1999. If `--start-idx` is omitted, the benchmark falls back to random sampling as before.
 
 ### Auto-update KB / DB / RAG
 
