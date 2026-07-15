@@ -158,6 +158,14 @@ npm run dev
 - Hardcoded default paths in `experiment/llama_3_8b_vllm.py` include `pre_trained/pi_reward_model` (judge), `experiment/access_code_predictor`, `experiment/results/planner_sft_v2`, and `experiment/results/generator_sft_v2`.
 - `--update-kb` / `AUTORED_UPDATE_KB` controls the new post-run KB/DB/RAG updater. Default is `all` (per-run append + benchmark rebuild), but it skips the expensive rebuild in multi-worker mode to avoid races.
 - The judge is a **stop-point classifier** (`ATTACK` vs `ATTEMPT`), not a success verifier. Final success is decided by extraction + verification against the victim model.
+- vLLM 0.8.5 may **silently ignore a PEFT LoRA adapter** even when `lora_request` is supplied. If planner outputs in the benchmark are prompt echoes or free-text plans instead of the trained XML, pre-merge the adapter into a full model:
+  ```bash
+  python scripts/merge_adapter_to_full.py \
+    --base-model Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
+    --adapter experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
+    --output-dir experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
+  ```
+  The runtime automatically uses `<adapter_path>_merged` if it exists. Verify LoRA behavior with `scripts/tests/test_vllm_planner_lora.py`.
 
 ## Training / Dataset Pipeline
 

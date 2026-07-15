@@ -532,6 +532,13 @@ def _load_lora_role_model(
 
     if os.path.exists(ckpt_path):
         ckpt_path = os.path.abspath(ckpt_path)
+        merged_path = ckpt_path + "_merged"
+        if os.path.exists(merged_path) and (Path(merged_path) / "config.json").exists():
+            ckpt_path = merged_path
+            print(
+                f"\n[LOAD] Found pre-merged {role_name} model at: {ckpt_path}; "
+                "using it instead of the LoRA adapter"
+            )
     print(f"\n[LOAD] Loading {role_name} adapter from: {ckpt_path}")
     t0 = time.time()
     is_lora_adapter = (Path(ckpt_path) / "adapter_config.json").exists()
