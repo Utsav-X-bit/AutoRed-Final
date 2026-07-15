@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-Merge a PEFT LoRA adapter into its base model and save a standalone full model.
+Merge one or more PEFT LoRA adapters into a base model and save a standalone full model.
 
 This is a workaround for vLLM 0.8.5 offline LoRA silently failing to apply some
 PEFT adapters. Using a merged full model removes the LoRA path entirely and
 lets vLLM load the adapter behavior as if it were a base checkpoint.
 
-Example (run on CUDA HPC worker; CPU offload is used for the merge step):
+Single-adapter example:
     python scripts/merge_adapter_to_full.py \
         --base-model Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
         --adapter experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
         --output-dir experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
+
+Combined multi-adapter example (planner + generator on the same base):
+    python scripts/merge_adapter_to_full.py \
+        --base-model Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
+        --adapter experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
+        --adapter experiment/results/generator_sft_v2 \
+        --output-dir experiment/results/planner_generator_combined_merged
 """
 
 from __future__ import annotations
@@ -21,9 +28,16 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Merge a PEFT LoRA adapter into a full model")
+    parser = argparse.ArgumentParser(
+        description="Merge one or more PEFT LoRA adapters into a full model"
+    )
     parser.add_argument("--base-model", required=True, help="Base model id or path")
-    parser.add_argument("--adapter", required=True, help="PEFT adapter directory")
+    parser.add_argument(
+        "--adapter",
+        action="append",
+        required=True,
+        help="PEFT adapter directory (repeat for multiple adapters, merged in order)",
+    )
     parser.add_argument(
         "--output-dir",
         required=True,
@@ -63,7 +77,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[MERGE] Loading base model: {args.base_model} ({args.dtype})")
-    base_model = AutoModelForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         args.base_model,
         torch_dtype=dtype,
         device_map=args.device_map,
@@ -71,22 +85,23 @@ def main() -> int:
         trust_remote_code=True,
     )
 
-    print(f"[MERGE] Loading adapter: {args.adapter}")
-    model = PeftModel.from_pretrained(
-        base_model,
-        args.adapter,
-        local_files_only=args.local_files_only,
-        trust_remote_code=True,
-    )
-
-    print("[MERGE] Merging and unloading adapter...")
-    merged = model.merge_and_unload()
+    for idx, adapter_path in enumerate(args.adapter):
+        print(f"[MERGE] Loading adapter {idx + 1}/{len(args.adapter)}: {adapter_path}")
+        peft_model = PeftModel.from_pretrained(
+            model,
+            adapter_path,
+            local_files_only=args.local_files_only,
+            trust_remote_code=True,
+        )
+        print(f"[MERGE] Merging adapter {idx + 1} and unloading...")
+        model = peft_model.merge_and_unload()
 
     print(f"[MERGE] Saving merged model to: {output_dir}")
-    merged.save_pretrained(output_dir, safe_serialization=True)
+    model.save_pretrained(output_dir, safe_serialization=True)
 
-    # Save the adapter tokenizer (it may contain the tuned chat template / special tokens)
-    tokenizer_dir = Path(args.adapter) if Path(args.adapter).exists() else args.base_model
+    # Save the tokenizer from the first adapter (it may contain the tuned chat
+    # template / special tokens). Fall back to base model if needed.
+    tokenizer_dir = Path(args.adapter[0]) if Path(args.adapter[0]).exists() else Path(args.base_model)
     print(f"[MERGE] Saving tokenizer from: {tokenizer_dir}")
     tokenizer = AutoTokenizer.from_pretrained(
         str(tokenizer_dir),

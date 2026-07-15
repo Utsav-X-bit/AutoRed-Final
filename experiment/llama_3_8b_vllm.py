@@ -171,6 +171,13 @@ _GPU_MEMORY_UTILIZATION = float(
     os.environ.get("AUTORED_GPU_MEMORY_UTILIZATION", "0.50")
 )
 
+# Fraction of GPU memory for the shared planner/generator vLLM instance.
+# Defaults higher than the victim because planner/generator prompts are short
+# and benefit from more KV cache for large batches.
+_SHARED_GPU_MEMORY_UTILIZATION = float(
+    os.environ.get("AUTORED_SHARED_GPU_MEMORY_UTILIZATION", "0.55")
+)
+
 
 def _sanitize_victim_config(model_path: str) -> None:
     """Patch head_dim into the cached config when it is unset.
@@ -517,10 +524,11 @@ def _load_shared_lora_base(base_model_path: str):
         max_loras=2,
         max_cpu_loras=8,
         lora_extra_vocab_size=256,
-        gpu_memory_utilization=0.50,
+        gpu_memory_utilization=_SHARED_GPU_MEMORY_UTILIZATION,
         tensor_parallel_size=1,
-        max_model_len=4096,
+        max_model_len=2048,
         enforce_eager=False,
+        enable_prefix_caching=True,
     )
     shared_lora_tokenizer = shared_lora_model.get_tokenizer()
     return shared_lora_tokenizer, shared_lora_model
@@ -2444,10 +2452,10 @@ def inference_llm_verbose_batch(
         if lora_request is not None:
             generate_kwargs["lora_request"] = lora_request
 
-        # Chunk planner generation to avoid KV-cache preemption when many
-        # scenarios are processed at once. The planner prompt+output is short,
-        # but 50 concurrent 4096-len sequences can exhaust KV cache.
-        chunk_size = 16 if label == "planner" else len(prompts)
+        # Planner prompts are short (<1500 tokens) and max_model_len is 2048,
+        # so with the increased KV cache we no longer need to chunk.  Fall back
+        # to a conservative chunk only if the batch is very large.
+        chunk_size = 50 if label == "planner" else len(prompts)
         for chunk_start in range(0, len(prompts), chunk_size):
             chunk_prompts = prompts[chunk_start : chunk_start + chunk_size]
             chunk_outputs = model.generate(

@@ -166,6 +166,16 @@ npm run dev
     --output-dir experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
   ```
   The runtime automatically uses `<adapter_path>_merged` if it exists. Verify LoRA behavior with `scripts/tests/test_vllm_planner_lora.py`.
+- To merge **both** planner and generator into one combined full model (recommended for benchmarks, avoids vLLM LoRA entirely):
+  ```bash
+  python scripts/merge_adapter_to_full.py \
+    --base-model Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
+    --adapter experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
+    --adapter experiment/results/generator_sft_v2 \
+    --output-dir experiment/results/planner_generator_combined_merged
+  ```
+  Test with `scripts/tests/test_combined_model.py`. Then run the benchmark with both `--planner-path` and `--generator-path` pointing to the combined merged directory.
+- The shared planner/generator vLLM instance uses `max_model_len=2048`, `enable_prefix_caching=True`, and `gpu_memory_utilization` controlled by `AUTORED_SHARED_GPU_MEMORY_UTILIZATION` (default 0.55). The victim default in the HPC wrapper is now 0.40 (`--gpu-memory-utilization`).
 
 ## Training / Dataset Pipeline
 

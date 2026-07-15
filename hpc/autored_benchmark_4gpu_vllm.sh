@@ -23,7 +23,7 @@ DATASET_PATH="data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_determi
 NUM_GPUS=4
 DATASET_SIZE=1000
 MAX_ATTEMPTS=20
-GPU_MEMORY_UTILIZATION=0.50
+GPU_MEMORY_UTILIZATION=0.40
 OUTPUT_DIR=""
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
@@ -47,7 +47,7 @@ usage() {
     echo "  --max-attempts N           Alias for --attempts"
     echo "  --trust-remote-code        Trust remote modeling code for the victim LLM"
     echo "  --tokenizer-mode MODE      vLLM tokenizer mode (default: auto; use 'mistral' for newer Mistral tokenizer files)"
-    echo "  --gpu-memory-utilization F vLLM GPU memory fraction, e.g. 0.45 (default: 0.50)"
+    echo "  --gpu-memory-utilization F vLLM GPU memory fraction for victim, e.g. 0.40 (default: 0.40)"
     exit 0
 }
 
