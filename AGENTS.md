@@ -39,6 +39,7 @@ Key environmental quirks:
 - If the DistilBERT judge / access-code predictor OOMs after the victim LLM loads, lower vLLM's GPU memory fraction with `--gpu-memory-utilization 0.40` (or `AUTORED_GPU_MEMORY_UTILIZATION=0.40`). The runtime default is `0.45` and the HPC wrapper default is `0.40`.
 - Each benchmark worker loads **two** vLLM instances on the same GPU: the victim model and the shared planner/generator model. On a 40 GB A100 this is tight. If the shared instance OOMs during KV-cache allocation, lower the victim's KV-cache footprint with `--victim-max-model-len 2048` (or `AUTORED_VICTIM_MAX_MODEL_LEN=2048`) and/or raise shared memory with `--shared-gpu-memory-utilization 0.55` (or `AUTORED_SHARED_GPU_MEMORY_UTILIZATION=0.55`). As a last resort, disable CUDA graph capture with `--enforce-eager` (or `AUTORED_ENFORCE_EAGER=1`).
 - You can also quantize the victim model to free GPU memory. vLLM supports in-flight BitsAndBytes 4-bit quantization with `--victim-quantization bitsandbytes` (or `AUTORED_VICTIM_QUANTIZATION=bitsandbytes`). Pre-quantized checkpoints such as AWQ or GPTQ are also supported by passing `--victim-quantization awq` or `gptq` (requires the matching checkpoint and packages).
+- The planner is called with `temperature=0.0` by default, which can cause it to greedily repeat the same high-confidence strategy (often `instruction_leak`) on many defenses. Increase `--planner-temperature` (or `AUTORED_PLANNER_TEMPERATURE`) to introduce strategy diversity, at the cost of occasional invalid XML that gets normalized by the planner contract.
 
 ## Running the System
 
@@ -101,14 +102,14 @@ If `--output-dir` is omitted, it defaults to `results/benchmarks/batched_${NUM_R
 The runtime can automatically keep the knowledge stores fresh after each run or benchmark:
 
 ```bash
-# Default: append per-run records and rebuild aggregate indices after a benchmark
-VLLM_USE_V1=0 AUTORED_UPDATE_KB=all python experiment/llama_3_8b_vllm.py --mode benchmark ...
+# Disable KB updates (default)
+VLLM_USE_V1=0 python experiment/llama_3_8b_vllm.py --mode benchmark ...
 
 # Only cheap per-run appends (success/failure JSONL + SQLite trajectory DB)
 VLLM_USE_V1=0 AUTORED_UPDATE_KB=run python experiment/llama_3_8b_vllm.py --mode benchmark ...
 
-# Disable
-VLLM_USE_V1=0 AUTORED_UPDATE_KB=off python experiment/llama_3_8b_vllm.py --mode benchmark ...
+# Append per-run records and rebuild aggregate indices after the benchmark
+VLLM_USE_V1=0 AUTORED_UPDATE_KB=all python experiment/llama_3_8b_vllm.py --mode benchmark ...
 ```
 
 `--update-kb` accepts `off | run | benchmark | all` and overrides the env var. The implementation lives in `experiment/kb_updater.py`:
@@ -158,7 +159,7 @@ npm run dev
 - **`experiment/llama_3_8b_vllm.py` loads a defense dataset at module import unless `AUTORED_SERVER_MODE=1` is set.** `server/main.py` sets this env var before importing anything from `experiment/`.
 - The planner and generator are separate LoRA adapters loaded onto the same vLLM base model when an `adapter_config.json` is present; otherwise each path is loaded as a standalone vLLM instance.
 - Hardcoded default paths in `experiment/llama_3_8b_vllm.py` include `pre_trained/pi_reward_model` (judge), `experiment/access_code_predictor`, `experiment/results/planner_sft_v2`, and `experiment/results/generator_sft_v2`.
-- `--update-kb` / `AUTORED_UPDATE_KB` controls the new post-run KB/DB/RAG updater. Default is `all` (per-run append + benchmark rebuild), but it skips the expensive rebuild in multi-worker mode to avoid races.
+- `--update-kb` / `AUTORED_UPDATE_KB` controls the post-run KB/DB/RAG updater. Default is `off`; set to `run` for cheap per-run appends, `benchmark` or `all` to also rebuild aggregate indices after a benchmark. It skips the expensive rebuild in multi-worker mode to avoid races.
 - The judge is a **stop-point classifier** (`ATTACK` vs `ATTEMPT`), not a success verifier. Final success is decided by extraction + verification against the victim model.
 - vLLM 0.8.5 may **silently ignore a PEFT LoRA adapter** even when `lora_request` is supplied. If planner outputs in the benchmark are prompt echoes or free-text plans instead of the trained XML, pre-merge the adapter into a full model:
   ```bash

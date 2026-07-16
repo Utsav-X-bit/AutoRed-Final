@@ -195,6 +195,12 @@ _ENFORCE_EAGER = os.environ.get("AUTORED_ENFORCE_EAGER", "0") == "1"
 # quantization for it (BitsAndBytes does for most HF models).
 _VICTIM_QUANTIZATION = os.environ.get("AUTORED_VICTIM_QUANTIZATION", None)
 
+# Sampling hyperparameters for the planner vLLM call. Temperature > 0 can break
+# a greedy collapse to a single strategy (e.g. always "instruction_leak"), but
+# may also produce less valid XML. Use with care.
+_PLANNER_TEMPERATURE = float(os.environ.get("AUTORED_PLANNER_TEMPERATURE", "0.0"))
+_PLANNER_TOP_P = float(os.environ.get("AUTORED_PLANNER_TOP_P", "1.0"))
+
 
 def _model_dir_name(model_id: str) -> str:
     """Turn a Hugging Face model id into a filesystem-safe directory name."""
@@ -317,6 +323,42 @@ def _load_models():
     print(f"[LOAD] ✓ {LLAMA_PATH} loaded ({MODEL_LOAD_TIME['victim']:.1f}s)")
 
 
+def _safe_chat_messages(messages: list) -> list:
+    """Return messages with system content merged into the first user message.
+
+    Some instruction-tuned tokenizers (e.g., Gemma) do not support a dedicated
+    system role in their chat template. This helper converts system messages to
+    user-message context while preserving the conversation ordering.
+    """
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    other_messages = [dict(m) for m in messages if m.get("role") != "system"]
+    system_prefix = "\n\n".join(system_parts)
+
+    if other_messages and other_messages[0].get("role") == "user":
+        other_messages[0]["content"] = (
+            system_prefix + "\n\n" + other_messages[0]["content"]
+        ).strip()
+    elif other_messages:
+        other_messages.insert(0, {"role": "user", "content": system_prefix})
+    elif system_prefix:
+        other_messages = [{"role": "user", "content": system_prefix}]
+
+    return other_messages
+
+
+def _apply_chat_template_safe(messages: list, tokenizer, **kwargs):
+    """Apply chat template, automatically falling back if system role unsupported."""
+    try:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+    except Exception as exc:
+        error_msg = str(exc)
+        if "System role not supported" in error_msg or (
+            "system" in error_msg.lower() and "role" in error_msg.lower()
+        ):
+            return tokenizer.apply_chat_template(_safe_chat_messages(messages), **kwargs)
+        raise
+
+
 def _truncate_system_content_to_fit(messages: list, tokenizer, max_total_tokens: int) -> list:
     """Trim the system/defense content in a messages list until it fits max_total_tokens.
 
@@ -335,10 +377,16 @@ def _truncate_system_content_to_fit(messages: list, tokenizer, max_total_tokens:
     original_len = len(messages[system_idx]["content"])
     min_chars = 100
     while True:
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        prompt_len = len(tokenizer(prompt, add_special_tokens=False)["input_ids"])
+        try:
+            prompt = _apply_chat_template_safe(
+                messages, tokenizer, tokenize=False, add_generation_prompt=True
+            )
+            prompt_len = len(tokenizer(prompt, add_special_tokens=False)["input_ids"])
+        except Exception as exc:
+            # If the tokenizer refuses the system role entirely, abort system-level
+            # trimming and let the final token-level clamp handle over-length prompts.
+            print(f"    [WARN] Chat template does not support system role ({exc}); skipping content trim")
+            return messages
         if prompt_len <= max_total_tokens or len(messages[system_idx]["content"]) <= min_chars:
             truncated_chars = len(messages[system_idx]["content"])
             if truncated_chars < original_len:
@@ -372,8 +420,8 @@ def _build_victim_prompt(messages: list, tokenizer, max_prompt_tokens: int):
     """
     # Initial content-aware truncation of the system/defense message.
     trimmed = _truncate_system_content_to_fit(messages, tokenizer, max_prompt_tokens)
-    token_ids = tokenizer.apply_chat_template(
-        trimmed, tokenize=True, add_generation_prompt=True, return_tensors=None
+    token_ids = _apply_chat_template_safe(
+        trimmed, tokenizer, tokenize=True, add_generation_prompt=True, return_tensors=None
     )
 
     # Defense in depth: never let a prompt exceed the victim budget.
@@ -2830,8 +2878,8 @@ class RedTeamingAgent:
             self.planner_model,
             self.planner_tokenizer,
             [prompt_text],
-            temperature=0.0,
-            top_p=1.0,
+            temperature=_PLANNER_TEMPERATURE,
+            top_p=_PLANNER_TOP_P,
             max_tokens=256,
             lora_request=planner_lora_request,
             label="planner",
@@ -5559,6 +5607,28 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--planner-temperature",
+        type=float,
+        default=_PLANNER_TEMPERATURE,
+        help=(
+            "vLLM sampling temperature for the planner. "
+            "Values > 0 can break a greedy collapse to a single strategy, "
+            "but may produce less contract-valid XML. "
+            f"(default: {_PLANNER_TEMPERATURE}). Can also be set with "
+            "AUTORED_PLANNER_TEMPERATURE."
+        ),
+    )
+    parser.add_argument(
+        "--planner-top-p",
+        type=float,
+        default=_PLANNER_TOP_P,
+        help=(
+            "vLLM nucleus sampling top_p for the planner "
+            f"(default: {_PLANNER_TOP_P}). Can also be set with "
+            "AUTORED_PLANNER_TOP_P."
+        ),
+    )
+    parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
         default=_GPU_MEMORY_UTILIZATION,
@@ -5620,11 +5690,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--update-kb",
         type=str,
-        default=os.environ.get("AUTORED_UPDATE_KB", "all").lower().strip(),
+        default=os.environ.get("AUTORED_UPDATE_KB", "off").lower().strip(),
         choices=["off", "run", "benchmark", "all"],
         help=(
             "After runs/benchmarks automatically append to KB/DB/RAG stores. "
-            "Can also be set with AUTORED_UPDATE_KB env var (default: all)."
+            "Set to 'run' for cheap per-run appends, 'benchmark'/'all' to also "
+            "rebuild aggregate indices. Off by default to avoid experimental "
+            "runs poisoning shared knowledge stores. Can also be set with "
+            "AUTORED_UPDATE_KB env var (default: off)."
         ),
     )
     args = parser.parse_args()
@@ -5646,6 +5719,8 @@ if __name__ == "__main__":
     _ENFORCE_EAGER = args.enforce_eager or _ENFORCE_EAGER
     if args.victim_quantization:
         _VICTIM_QUANTIZATION = args.victim_quantization
+    _PLANNER_TEMPERATURE = args.planner_temperature
+    _PLANNER_TOP_P = args.planner_top_p
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:
