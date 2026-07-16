@@ -1135,9 +1135,9 @@ class CTFEnvironment:
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": attack_prompt}
             ]
-            
-        prompt = llama_tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+
+        prompt = _apply_chat_template_safe(
+            messages, llama_tokenizer, tokenize=False, add_generation_prompt=True
         )
         
         sampling_params = SamplingParams(max_tokens=200, temperature=0.7, top_p=0.9)
@@ -1626,8 +1626,8 @@ class SensitiveInfoExtractor:
             {"role": "user", "content": extractor_prompt},
         ]
         tkr = self._llm_tokenizer or llama_tokenizer
-        return tkr.apply_chat_template(
-            prompt_messages, tokenize=False, add_generation_prompt=True
+        return _apply_chat_template_safe(
+            prompt_messages, tkr, tokenize=False, add_generation_prompt=True
         )
 
     def parse_llm_extract_output(self, raw: str) -> list:
