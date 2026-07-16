@@ -36,7 +36,8 @@ Key environmental quirks:
 - **GPU-heavy work belongs on the HPC cluster.** Single experiments, benchmarks, extractor benchmarks, and any command that loads vLLM / CUDA models are meant to run on the cluster. Do not run them on a local workstation. Local machines should only be used for model-free workflows (UI development, backend browsing with `AUTORED_LOAD_MODELS=0`, or parsing/merging scripts).
 - For offline/air-gapped HPC runs: set `TRANSFORMERS_OFFLINE=1` and `HF_HUB_OFFLINE=1`.
 - If vLLM fails during memory profiling with `AssertionError: Error in memory profiling`, try `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` or `export AUTORED_SKIP_VLLM_MEMORY_PROFILE=1` before launching. The latter disables the memory-increase assertion inside vLLM's worker.
-- If the DistilBERT judge / access-code predictor OOMs after the victim LLM loads, lower vLLM's GPU memory fraction with `--gpu-memory-utilization 0.45` (or `AUTORED_GPU_MEMORY_UTILIZATION=0.45`). The default is `0.50`.
+- If the DistilBERT judge / access-code predictor OOMs after the victim LLM loads, lower vLLM's GPU memory fraction with `--gpu-memory-utilization 0.40` (or `AUTORED_GPU_MEMORY_UTILIZATION=0.40`). The default is `0.45`.
+- Each benchmark worker loads **two** vLLM instances on the same GPU: the victim model and the shared planner/generator model. On a 40 GB A100 this is tight. If the shared instance OOMs during KV-cache allocation, lower the victim's KV-cache footprint with `--victim-max-model-len 2048` (or `AUTORED_VICTIM_MAX_MODEL_LEN=2048`) and/or raise shared memory with `--shared-gpu-memory-utilization 0.55` (or `AUTORED_SHARED_GPU_MEMORY_UTILIZATION=0.55`). As a last resort, disable CUDA graph capture with `--enforce-eager` (or `AUTORED_ENFORCE_EAGER=1`).
 
 ## Running the System
 
@@ -166,17 +167,24 @@ npm run dev
     --output-dir experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
   ```
   The runtime automatically uses `<adapter_path>_merged` if it exists. Verify LoRA behavior with `scripts/tests/test_vllm_planner_lora.py`.
-- To merge **both** planner and generator into one combined full model (avoids vLLM LoRA entirely):
+- The recommended working loadout is a **pre-merged planner full model** plus the **generator as a LoRA adapter** on that same base. This uses only one 8B vLLM instance:
   ```bash
+  # Merge the planner adapter into a full model once
   python scripts/merge_adapter_to_full.py \
     --base-model Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
     --adapter experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
-    --adapter experiment/results/generator_sft_v2 \
-    --output-dir experiment/results/planner_generator_combined_merged
+    --output-dir experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
+
+  # Generator stays an adapter; runtime applies it as a LoRA on top of the planner base
+  VLLM_USE_V1=0 python experiment/llama_3_8b_vllm.py \
+    --planner-path experiment/results/planner_sft_v2_contract_anchor/checkpoint-27 \
+    --generator-path experiment/results/generator_sft_v2 \
+    --base-generator-path Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2 \
+    ...
   ```
-  **Important:** merging order matters. If `scripts/tests/test_combined_model.py` shows the planner has lost its XML format, the last-merged adapter dominated. In that case use two separate merged models (planner merged + generator merged) or keep planner merged and load generator as a LoRA on top.
-  Test with `scripts/tests/test_combined_model.py` and verify generator LoRA with `scripts/tests/test_vllm_generator_lora.py`.
-- The shared planner/generator vLLM instance uses `max_model_len=2048`, `enable_prefix_caching=True`, and `gpu_memory_utilization` controlled by `AUTORED_SHARED_GPU_MEMORY_UTILIZATION` (default 0.55). The victim default in the HPC wrapper is now 0.40 (`--gpu-memory-utilization`).
+  The runtime prefers `<planner_path>_merged` when it exists and loads `generator_sft_v2` as a LoRA on top of that model. Verify with `scripts/tests/test_vllm_generator_lora.py`.
+- A combined planner+generator merge can save a LoRA slot, but **merge order matters and easily degrades planner XML output**. A combined model built planner-then-generator failed `scripts/tests/test_combined_model.py`, so prefer the planner-merged + generator-LoRA setup. If you still want a combined model, test both merge orders with `scripts/tests/test_combined_model.py`.
+- The shared planner/generator vLLM instance uses `max_model_len=2048`, `enable_prefix_caching=True`, and `gpu_memory_utilization` controlled by `AUTORED_SHARED_GPU_MEMORY_UTILIZATION` (default 0.55). The victim default is `0.45` and the HPC wrapper defaults to `0.40` (`--gpu-memory-utilization`).
 
 ## Training / Dataset Pipeline
 
