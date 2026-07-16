@@ -168,7 +168,7 @@ _TOKENIZER_MODE = os.environ.get("AUTORED_TOKENIZER_MODE", "auto")
 # Fraction of GPU memory vLLM will reserve for the victim LLM. Lower this if
 # loading the DistilBERT judge/access-code predictor causes OOM.
 _GPU_MEMORY_UTILIZATION = float(
-    os.environ.get("AUTORED_GPU_MEMORY_UTILIZATION", "0.50")
+    os.environ.get("AUTORED_GPU_MEMORY_UTILIZATION", "0.45")
 )
 
 # Fraction of GPU memory for the shared planner/generator vLLM instance.
@@ -177,6 +177,17 @@ _GPU_MEMORY_UTILIZATION = float(
 _SHARED_GPU_MEMORY_UTILIZATION = float(
     os.environ.get("AUTORED_SHARED_GPU_MEMORY_UTILIZATION", "0.55")
 )
+
+# Victim max sequence length. Lowering this shrinks the vLLM KV cache and is
+# useful when fitting both the victim and shared models on a single 40 GB GPU.
+_VICTIM_MAX_MODEL_LEN = int(
+    os.environ.get("AUTORED_VICTIM_MAX_MODEL_LEN", "4096")
+)
+
+# Disable vLLM CUDA graph capture for the victim or shared models. Eager mode
+# trades some throughput for lower memory use and faster startup; set this if
+# graph capture causes OOM.
+_ENFORCE_EAGER = os.environ.get("AUTORED_ENFORCE_EAGER", "0") == "1"
 
 
 def _sanitize_victim_config(model_path: str) -> None:
@@ -281,8 +292,8 @@ def _load_models():
         tokenizer_mode=_TOKENIZER_MODE,
         gpu_memory_utilization=_GPU_MEMORY_UTILIZATION,
         tensor_parallel_size=1,
-        max_model_len=4096,            # Keep at 4096 to prevent decoder prompt length errors
-        enforce_eager=False,
+        max_model_len=_VICTIM_MAX_MODEL_LEN,
+        enforce_eager=_ENFORCE_EAGER,
     )
     llama_tokenizer = llama_model.get_tokenizer()
     MODEL_LOAD_TIME["victim"] = time.time() - t0
@@ -583,7 +594,7 @@ def _load_shared_lora_base(base_model_path: str):
         gpu_memory_utilization=_SHARED_GPU_MEMORY_UTILIZATION,
         tensor_parallel_size=1,
         max_model_len=2048,
-        enforce_eager=False,
+        enforce_eager=_ENFORCE_EAGER,
         enable_prefix_caching=True,
     )
     shared_lora_tokenizer = shared_lora_model.get_tokenizer()
@@ -5526,6 +5537,37 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--shared-gpu-memory-utilization",
+        type=float,
+        default=_SHARED_GPU_MEMORY_UTILIZATION,
+        help=(
+            "Fraction of GPU memory vLLM reserves for the shared "
+            "planner/generator LLM instance "
+            f"(default: {_SHARED_GPU_MEMORY_UTILIZATION}). Can also be set with "
+            "AUTORED_SHARED_GPU_MEMORY_UTILIZATION."
+        ),
+    )
+    parser.add_argument(
+        "--victim-max-model-len",
+        type=int,
+        default=_VICTIM_MAX_MODEL_LEN,
+        help=(
+            "vLLM max_model_len for the victim model. Lower this to shrink the "
+            "victim KV cache and fit both models on a single GPU "
+            f"(default: {_VICTIM_MAX_MODEL_LEN}). Can also be set with "
+            "AUTORED_VICTIM_MAX_MODEL_LEN."
+        ),
+    )
+    parser.add_argument(
+        "--enforce-eager",
+        action="store_true",
+        help=(
+            "Disable vLLM CUDA graph capture for the victim and shared models. "
+            "Lowers memory use/startup time at the cost of throughput. Can also "
+            "be enabled with AUTORED_ENFORCE_EAGER=1."
+        ),
+    )
+    parser.add_argument(
         "--attempts",
         "--max-attempts",
         dest="max_attempts",
@@ -5566,6 +5608,9 @@ if __name__ == "__main__":
     _TRUST_REMOTE_CODE = args.trust_remote_code or _TRUST_REMOTE_CODE
     _TOKENIZER_MODE = args.tokenizer_mode
     _GPU_MEMORY_UTILIZATION = args.gpu_memory_utilization
+    _SHARED_GPU_MEMORY_UTILIZATION = args.shared_gpu_memory_utilization
+    _VICTIM_MAX_MODEL_LEN = args.victim_max_model_len
+    _ENFORCE_EAGER = args.enforce_eager or _ENFORCE_EAGER
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:

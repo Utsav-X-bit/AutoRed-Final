@@ -24,6 +24,8 @@ NUM_GPUS=4
 DATASET_SIZE=1000
 MAX_ATTEMPTS=20
 GPU_MEMORY_UTILIZATION=0.40
+SHARED_GPU_MEMORY_UTILIZATION=0.55
+VICTIM_MAX_MODEL_LEN=2048
 OUTPUT_DIR=""
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
@@ -45,9 +47,11 @@ usage() {
     echo "  --start-idx N              Zero-based start index for deterministic benchmark slice"
     echo "  --attempts N               Maximum attack attempts per scenario (default: 20)"
     echo "  --max-attempts N           Alias for --attempts"
-    echo "  --trust-remote-code        Trust remote modeling code for the victim LLM"
-    echo "  --tokenizer-mode MODE      vLLM tokenizer mode (default: auto; use 'mistral' for newer Mistral tokenizer files)"
-    echo "  --gpu-memory-utilization F vLLM GPU memory fraction for victim, e.g. 0.40 (default: 0.40)"
+    echo "  --trust-remote-code              Trust remote modeling code for the victim LLM"
+    echo "  --tokenizer-mode MODE            vLLM tokenizer mode (default: auto; use 'mistral' for newer Mistral tokenizer files)"
+    echo "  --gpu-memory-utilization F       vLLM GPU memory fraction for victim (default: 0.40)"
+    echo "  --shared-gpu-memory-utilization F vLLM GPU memory fraction for shared planner/generator (default: 0.55)"
+    echo "  --victim-max-model-len N         vLLM max_model_len for the victim model; lower reduces KV cache (default: 2048)"
     exit 0
 }
 
@@ -66,6 +70,8 @@ while [[ $# -gt 0 ]]; do
         --trust-remote-code) TRUST_REMOTE_CODE=1; shift ;;
         --tokenizer-mode) TOKENIZER_MODE="$2"; shift 2 ;;
         --gpu-memory-utilization) GPU_MEMORY_UTILIZATION="$2"; shift 2 ;;
+        --shared-gpu-memory-utilization) SHARED_GPU_MEMORY_UTILIZATION="$2"; shift 2 ;;
+        --victim-max-model-len) VICTIM_MAX_MODEL_LEN="$2"; shift 2 ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -117,9 +123,11 @@ echo "Max Attempts : $MAX_ATTEMPTS"
 if [ "$TRUST_REMOTE_CODE" -eq 1 ]; then
     echo "Trust Remote : yes"
 fi
-echo "Tokenizer Mode: $TOKENIZER_MODE"
-echo "GPU Memory   : $GPU_MEMORY_UTILIZATION"
-echo "Output Dir   : $OUTPUT_DIR"
+echo "Tokenizer Mode      : $TOKENIZER_MODE"
+echo "Victim GPU Memory   : $GPU_MEMORY_UTILIZATION"
+echo "Shared GPU Memory   : $SHARED_GPU_MEMORY_UTILIZATION"
+echo "Victim Max Model Len: $VICTIM_MAX_MODEL_LEN"
+echo "Output Dir          : $OUTPUT_DIR"
 echo "============================================="
 
 # =============================================================================
@@ -143,6 +151,8 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         --dataset-size "$DATASET_SIZE" \
         --attempts "$MAX_ATTEMPTS" \
         --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+        --shared-gpu-memory-utilization "$SHARED_GPU_MEMORY_UTILIZATION" \
+        --victim-max-model-len "$VICTIM_MAX_MODEL_LEN" \
         --benchmark-output "$WORKER_OUTPUT" \
         --worker-id "$WORKER_ID" \
         --num-workers "$NUM_GPUS" \
