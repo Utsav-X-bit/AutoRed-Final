@@ -1,118 +1,2 @@
-INFO 07-16 14:21:20 [importing.py:53] Triton module has been replaced with a placeholder.
-INFO 07-16 14:21:30 [__init__.py:239] Automatically detected platform cuda.
-
-[LOAD] Loading defense dataset...
-[LOAD] Could not load default dataset: Dataset not found: experiment/raw_dump_defenses.jsonl.bz2
-[CONFIG] Using device: cuda
-
-[LOAD] Loading mistralai/Mistral-7B-Instruct-v0.2 (target LLM)...
-INFO 07-16 14:22:36 [config.py:717] This model supports multiple tasks: {'reward', 'embed', 'generate', 'score', 'classify'}. Defaulting to 'generate'.
-INFO 07-16 14:22:36 [llm_engine.py:240] Initializing a V0 LLM engine (v0.8.5.post1) with config: model='mistralai/Mistral-7B-Instruct-v0.2', speculative_config=None, tokenizer='mistralai/Mistral-7B-Instruct-v0.2', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=4096, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto,  device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar', reasoning_backend=None), observability_config=ObservabilityConfig(show_hidden_metrics=False, otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=None, served_model_name=mistralai/Mistral-7B-Instruct-v0.2, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=None, chunked_prefill_enabled=False, use_async_output_proc=True, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":[],"compile_sizes":[],"cudagraph_capture_sizes":[256,248,240,232,224,216,208,200,192,184,176,168,160,152,144,136,128,120,112,104,96,88,80,72,64,56,48,40,32,24,16,8,4,2,1],"max_capture_size":256}, use_cached_outputs=False, 
-/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/transformers_utils/tokenizer_group.py:23: FutureWarning: It is strongly recommended to run mistral models with `--tokenizer-mode "mistral"` to ensure correct encoding and decoding.
-  self.tokenizer = get_tokenizer(self.tokenizer_id, **tokenizer_config)
-/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/executor/uniproc_executor.py:29: UserWarning: Failed to get the IP address, using 0.0.0.0 by default.The value can be set by the environment variable VLLM_HOST_IP or HOST_IP.
-  get_ip(), get_open_port())
-INFO 07-16 14:22:41 [cuda.py:292] Using Flash Attention backend.
-INFO 07-16 14:22:44 [parallel_state.py:1004] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, TP rank 0
-INFO 07-16 14:22:44 [model_runner.py:1108] Starting to load model mistralai/Mistral-7B-Instruct-v0.2...
-INFO 07-16 14:22:45 [weight_utils.py:265] Using model weights format ['*.safetensors', '*.bin', '*.pt']
-Loading safetensors checkpoint shards:   0% Completed | 0/3 [00:00<?, ?it/s]
-Loading safetensors checkpoint shards:  33% Completed | 1/3 [00:20<00:41, 20.50s/it]
-Loading safetensors checkpoint shards:  67% Completed | 2/3 [00:41<00:20, 20.78s/it]
-Loading safetensors checkpoint shards: 100% Completed | 3/3 [01:03<00:00, 21.24s/it]
-Loading safetensors checkpoint shards: 100% Completed | 3/3 [01:03<00:00, 21.09s/it]
-
-INFO 07-16 14:23:48 [loader.py:458] Loading weights took 63.64 seconds
-INFO 07-16 14:23:49 [model_runner.py:1140] Model loading took 13.4967 GiB and 64.810353 seconds
-INFO 07-16 14:23:54 [worker.py:287] Memory profiling takes 4.01 seconds
-INFO 07-16 14:23:54 [worker.py:287] the current vLLM instance can use total_gpu_memory (39.38GiB) x gpu_memory_utilization (0.55) = 21.66GiB
-INFO 07-16 14:23:54 [worker.py:287] model weights take 13.50GiB; non_torch_memory takes 0.09GiB; PyTorch activation peak memory takes 0.43GiB; the rest of the memory reserved for KV Cache is 7.64GiB.
-INFO 07-16 14:23:55 [executor_base.py:112] # cuda blocks: 3912, # CPU blocks: 2048
-INFO 07-16 14:23:55 [executor_base.py:117] Maximum concurrency for 4096 tokens per request: 15.28x
-INFO 07-16 14:24:08 [model_runner.py:1450] Capturing cudagraphs for decoding. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI. If out-of-memory error occurs during cudagraph capture, consider decreasing `gpu_memory_utilization` or switching to eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-Capturing CUDA graph shapes:   0%|          | 0/35 [00:00<?, ?it/s]Capturing CUDA graph shapes:   3%|▎         | 1/35 [00:02<01:10,  2.07s/it]Capturing CUDA graph shapes:   6%|▌         | 2/35 [00:03<01:04,  1.94s/it]Capturing CUDA graph shapes:   9%|▊         | 3/35 [00:05<01:00,  1.89s/it]Capturing CUDA graph shapes:  11%|█▏        | 4/35 [00:07<00:57,  1.86s/it]Capturing CUDA graph shapes:  14%|█▍        | 5/35 [00:09<00:55,  1.84s/it]Capturing CUDA graph shapes:  17%|█▋        | 6/35 [00:11<00:52,  1.83s/it]Capturing CUDA graph shapes:  20%|██        | 7/35 [00:13<00:51,  1.86s/it]Capturing CUDA graph shapes:  23%|██▎       | 8/35 [00:14<00:49,  1.84s/it]Capturing CUDA graph shapes:  26%|██▌       | 9/35 [00:16<00:47,  1.84s/it]Capturing CUDA graph shapes:  29%|██▊       | 10/35 [00:18<00:45,  1.82s/it]Capturing CUDA graph shapes:  31%|███▏      | 11/35 [00:20<00:43,  1.83s/it]Capturing CUDA graph shapes:  34%|███▍      | 12/35 [00:22<00:42,  1.83s/it]Capturing CUDA graph shapes:  37%|███▋      | 13/35 [00:24<00:41,  1.90s/it]Capturing CUDA graph shapes:  40%|████      | 14/35 [00:26<00:39,  1.87s/it]Capturing CUDA graph shapes:  43%|████▎     | 15/35 [00:27<00:37,  1.85s/it]Capturing CUDA graph shapes:  46%|████▌     | 16/35 [00:29<00:35,  1.84s/it]Capturing CUDA graph shapes:  49%|████▊     | 17/35 [00:31<00:33,  1.84s/it]Capturing CUDA graph shapes:  51%|█████▏    | 18/35 [00:33<00:31,  1.84s/it]Capturing CUDA graph shapes:  54%|█████▍    | 19/35 [00:35<00:29,  1.84s/it]Capturing CUDA graph shapes:  57%|█████▋    | 20/35 [00:36<00:27,  1.83s/it]Capturing CUDA graph shapes:  60%|██████    | 21/35 [00:38<00:25,  1.84s/it]Capturing CUDA graph shapes:  63%|██████▎   | 22/35 [00:40<00:23,  1.83s/it]Capturing CUDA graph shapes:  66%|██████▌   | 23/35 [00:42<00:22,  1.87s/it]Capturing CUDA graph shapes:  69%|██████▊   | 24/35 [00:44<00:20,  1.87s/it]Capturing CUDA graph shapes:  71%|███████▏  | 25/35 [00:46<00:18,  1.85s/it]Capturing CUDA graph shapes:  74%|███████▍  | 26/35 [00:48<00:16,  1.84s/it]Capturing CUDA graph shapes:  77%|███████▋  | 27/35 [00:49<00:14,  1.84s/it]Capturing CUDA graph shapes:  80%|████████  | 28/35 [00:51<00:12,  1.83s/it]Capturing CUDA graph shapes:  83%|████████▎ | 29/35 [00:53<00:11,  1.86s/it]Capturing CUDA graph shapes:  86%|████████▌ | 30/35 [00:55<00:09,  1.84s/it]Capturing CUDA graph shapes:  89%|████████▊ | 31/35 [00:57<00:07,  1.85s/it]Capturing CUDA graph shapes:  91%|█████████▏| 32/35 [00:59<00:05,  1.85s/it]Capturing CUDA graph shapes:  94%|█████████▍| 33/35 [01:01<00:03,  1.84s/it]Capturing CUDA graph shapes:  97%|█████████▋| 34/35 [01:02<00:01,  1.83s/it]Capturing CUDA graph shapes: 100%|██████████| 35/35 [01:04<00:00,  1.85s/it]Capturing CUDA graph shapes: 100%|██████████| 35/35 [01:04<00:00,  1.85s/it]
-INFO 07-16 14:25:13 [model_runner.py:1592] Graph capturing finished in 65 secs, took 0.25 GiB
-INFO 07-16 14:25:13 [llm_engine.py:437] init engine (profile, create kv cache, warmup model) took 83.16 seconds
-[LOAD] ✓ mistralai/Mistral-7B-Instruct-v0.2 loaded (204.9s)
-
-[LOAD] Loading defense dataset from data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_deterministic_or_indirect.jsonl...
-[LOAD] Sampling dataset with size=1000...
-[LOAD] ✓ Dataset ready: 1000 defense scenarios (from 34576 total)
-
-[LOAD] Loading Decision model (DistilBERT) from: AR_pre_trained/pi_reward_model
-[LOAD] ✓ Decision model loaded (2.1s)
-
-[LOAD] Loading Access Code Predictor from: experiment/access_code_predictor
-[LOAD] ✓ Access Code Predictor loaded (0.8s)
-
-[LOAD] Found pre-merged Planner model at: /nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged; using it instead of the LoRA adapter
-
-[LOAD] Loading Planner adapter from: /nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
-[LOAD] Planner path is a full model; loading it as the shared LoRA base
-[LOAD] Loading shared LoRA base model from: /nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged
-INFO 07-16 14:26:14 [config.py:717] This model supports multiple tasks: {'reward', 'embed', 'generate', 'score', 'classify'}. Defaulting to 'generate'.
-INFO 07-16 14:26:14 [llm_engine.py:240] Initializing a V0 LLM engine (v0.8.5.post1) with config: model='/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged', speculative_config=None, tokenizer='/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=2048, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto,  device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='xgrammar', reasoning_backend=None), observability_config=ObservabilityConfig(show_hidden_metrics=False, otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=None, served_model_name=/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged, num_scheduler_steps=1, multi_step_stream_outputs=True, enable_prefix_caching=True, chunked_prefill_enabled=False, use_async_output_proc=True, disable_mm_preprocessor_cache=False, mm_processor_kwargs=None, pooler_config=None, compilation_config={"splitting_ops":[],"compile_sizes":[],"cudagraph_capture_sizes":[256,248,240,232,224,216,208,200,192,184,176,168,160,152,144,136,128,120,112,104,96,88,80,72,64,56,48,40,32,24,16,8,4,2,1],"max_capture_size":256}, use_cached_outputs=False, 
-/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/executor/uniproc_executor.py:29: UserWarning: Failed to get the IP address, using 0.0.0.0 by default.The value can be set by the environment variable VLLM_HOST_IP or HOST_IP.
-  get_ip(), get_open_port())
-INFO 07-16 14:26:17 [model_runner.py:1108] Starting to load model /nlsasfs/home/isea/isea38/AutoRed-Final/experiment/results/planner_sft_v2_contract_anchor/checkpoint-27_merged...
-Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
-Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:03<00:11,  3.95s/it]
-Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:29<00:32, 16.39s/it]
-Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:50<00:18, 18.80s/it]
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [01:12<00:00, 19.95s/it]
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [01:12<00:00, 18.11s/it]
-
-INFO 07-16 14:27:32 [loader.py:458] Loading weights took 73.07 seconds
-INFO 07-16 14:27:33 [punica_selector.py:18] Using PunicaWrapperGPU.
-INFO 07-16 14:27:35 [model_runner.py:1140] Model loading took 16.3792 GiB and 76.187104 seconds
-[rank0]: Traceback (most recent call last):
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/llama_3_8b_vllm.py", line 5619, in <module>
-[rank0]:     planner_tokenizer, planner_model = load_planner_model(PLANNER_PATH, BASE_GENERATOR_PATH)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/llama_3_8b_vllm.py", line 670, in load_planner_model
-[rank0]:     return _load_lora_role_model(
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/llama_3_8b_vllm.py", line 624, in _load_lora_role_model
-[rank0]:     tokenizer, model = _load_shared_lora_base(ckpt_path)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/experiment/llama_3_8b_vllm.py", line 576, in _load_shared_lora_base
-[rank0]:     shared_lora_model = LLM(
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/utils.py", line 1161, in inner
-[rank0]:     return fn(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/entrypoints/llm.py", line 247, in __init__
-[rank0]:     self.llm_engine = LLMEngine.from_engine_args(
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/engine/llm_engine.py", line 510, in from_engine_args
-[rank0]:     return engine_cls.from_vllm_config(
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/engine/llm_engine.py", line 486, in from_vllm_config
-[rank0]:     return cls(
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/engine/llm_engine.py", line 278, in __init__
-[rank0]:     self._initialize_kv_caches()
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/engine/llm_engine.py", line 422, in _initialize_kv_caches
-[rank0]:     self.model_executor.determine_num_available_blocks())
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/executor/executor_base.py", line 103, in determine_num_available_blocks
-[rank0]:     results = self.collective_rpc("determine_num_available_blocks")
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/executor/uniproc_executor.py", line 56, in collective_rpc
-[rank0]:     answer = run_method(self.driver_worker, method, args, kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/utils.py", line 2456, in run_method
-[rank0]:     return func(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-[rank0]:     return func(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/worker/worker.py", line 249, in determine_num_available_blocks
-[rank0]:     self.model_runner.profile_run()
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-[rank0]:     return func(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/worker/model_runner.py", line 1237, in profile_run
-[rank0]:     self._dummy_run(max_num_batched_tokens, max_num_seqs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/worker/model_runner.py", line 1363, in _dummy_run
-[rank0]:     self.execute_model(model_input, kv_caches, intermediate_tensors)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-[rank0]:     return func(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/worker/model_runner.py", line 1820, in execute_model
-[rank0]:     output: SamplerOutput = self.sampler(
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/model_executor/layers/sampler.py", line 274, in forward
-[rank0]:     logits = _apply_top_k_top_p(logits, sampling_tensors.top_ps,
-[rank0]:   File "/nlsasfs/home/isea/isea38/AutoRed-Final/.venv/lib/python3.10/site-packages/vllm/model_executor/layers/sampler.py", line 392, in _apply_top_k_top_p
-[rank0]:     logits_sort, logits_idx = logits.sort(dim=-1, descending=False)
-[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 252.00 MiB. GPU 0 has a total capacity of 39.38 GiB of which 231.38 MiB is free. Including non-PyTorch memory, this process has 39.14 GiB memory in use. Of the allocated memory 38.40 GiB is allocated by PyTorch, with 44.00 MiB allocated in private pools (e.g., CUDA Graphs), and 63.81 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
-[rank0]:[W716 14:27:47.945530699 ProcessGroupNCCL.cpp:1496] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+INFO 07-16 17:06:01 [importing.py:53] Triton module has been replaced with a placeholder.
+INFO 07-16 17:06:26 [__init__.py:239] Automatically detected platform cuda.
