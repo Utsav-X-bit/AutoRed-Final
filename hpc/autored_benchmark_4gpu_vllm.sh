@@ -31,6 +31,7 @@ VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
 TRUST_REMOTE_CODE=0
 TOKENIZER_MODE="auto"
+VICTIM_QUANTIZATION=""
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -52,6 +53,7 @@ usage() {
     echo "  --gpu-memory-utilization F       vLLM GPU memory fraction for victim (default: 0.40)"
     echo "  --shared-gpu-memory-utilization F vLLM GPU memory fraction for shared planner/generator (default: 0.55)"
     echo "  --victim-max-model-len N         vLLM max_model_len for the victim model; lower reduces KV cache (default: 2048)"
+    echo "  --victim-quantization METHOD    vLLM quantization for victim (e.g., bitsandbytes, awq, gptq)"
     exit 0
 }
 
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --gpu-memory-utilization) GPU_MEMORY_UTILIZATION="$2"; shift 2 ;;
         --shared-gpu-memory-utilization) SHARED_GPU_MEMORY_UTILIZATION="$2"; shift 2 ;;
         --victim-max-model-len) VICTIM_MAX_MODEL_LEN="$2"; shift 2 ;;
+        --victim-quantization) VICTIM_QUANTIZATION="$2"; shift 2 ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -127,6 +130,9 @@ echo "Tokenizer Mode      : $TOKENIZER_MODE"
 echo "Victim GPU Memory   : $GPU_MEMORY_UTILIZATION"
 echo "Shared GPU Memory   : $SHARED_GPU_MEMORY_UTILIZATION"
 echo "Victim Max Model Len: $VICTIM_MAX_MODEL_LEN"
+if [ -n "$VICTIM_QUANTIZATION" ]; then
+    echo "Victim Quantization : $VICTIM_QUANTIZATION"
+fi
 echo "Output Dir          : $OUTPUT_DIR"
 echo "============================================="
 
@@ -161,6 +167,7 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         --victim-model-id "$VICTIM_MODEL_ID" \
         $( [ "$TRUST_REMOTE_CODE" -eq 1 ] && echo "--trust-remote-code" ) \
         --tokenizer-mode "$TOKENIZER_MODE" \
+        $( [ -n "$VICTIM_QUANTIZATION" ] && echo "--victim-quantization $VICTIM_QUANTIZATION" ) \
         $( [ -n "$BASE_GENERATOR_PATH" ] && echo "--base-generator-path $BASE_GENERATOR_PATH" ) \
         $( [ -n "$DATASET_PATH" ] && echo "--dataset-path $DATASET_PATH" ) \
         $( [ -n "$START_IDX" ] && echo "--start-idx $START_IDX" ) \

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -8,6 +9,19 @@ from .run_normalizer import normalize_run
 
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 BENCHMARKS_DIR = RESULTS_DIR / "benchmarks"
+
+
+def _model_dir_name(model_id: str) -> str:
+    """Turn a Hugging Face model id into a filesystem-safe directory name."""
+    return re.sub(r"[\\/:\s]+", "--", model_id).strip("-") or "unknown-model"
+
+
+def _date_dir(path: Path) -> Optional[Path]:
+    """Return the YYYY-MM-DD ancestor of a path, if any."""
+    for parent in path.parents:
+        if len(parent.name) == 10 and parent.name[4] == "-" and parent.name[7] == "-":
+            return parent
+    return None
 
 
 def _overall_success(result: Dict[str, Any]) -> bool:
@@ -43,17 +57,42 @@ def _archive_date_from_timestamp(timestamp: str) -> Optional[str]:
         return None
 
 
-def _trace_archives_for_timestamp(timestamp: str) -> List[Path]:
+def _trace_archives_for_timestamp(
+    timestamp: str, victim_name: Optional[str] = None
+) -> List[Path]:
     date = _archive_date_from_timestamp(timestamp)
     if not date:
         return []
     day_root = RESULTS_DIR / date
     if not day_root.exists():
         return []
-    return sorted(
-        [p for p in day_root.iterdir() if p.is_dir() and list(p.glob("run_*.json"))],
-        key=lambda p: p.stat().st_mtime,
-    )
+
+    # Discover archive directories recursively (new layout groups by victim
+    # model: results/YYYY-MM-DD/<victim>/HH-MM-SS_µs/run_*.json).
+    archive_dirs: set[Path] = set()
+    for run_file in day_root.rglob("run_*.json"):
+        archive_dirs.add(run_file.parent)
+    if not victim_name:
+        return sorted(archive_dirs, key=lambda p: p.stat().st_mtime)
+
+    # Filter archives to the requested victim model so separate targets don't
+    # get mixed under the same benchmark in the UI.
+    victim_dir = _model_dir_name(victim_name)
+    filtered: List[Path] = []
+    for archive_dir in archive_dirs:
+        # Fast path: the new nested path contains the victim directory.
+        if victim_dir in (a.name for a in archive_dir.parents if a != day_root):
+            filtered.append(archive_dir)
+            continue
+        # Fallback: inspect the first run file's victim metadata (covers legacy
+        # flat paths and unusual layouts).
+        first_run = next(archive_dir.glob("run_*.json"), None)
+        if first_run:
+            meta = _run_metadata_from_file(first_run)
+            if meta.get("victim") == victim_name:
+                filtered.append(archive_dir)
+
+    return sorted(filtered, key=lambda p: p.stat().st_mtime)
 
 
 def _run_metadata_from_file(path: Path) -> Dict[str, Any]:
@@ -89,9 +128,13 @@ def _summarize_trace_archive(path: Path) -> Dict[str, Any]:
         total_attempts += int(meta["total_attempts"])
 
     run_count = len(runs)
+    date = _date_dir(path)
+    archive_id = (
+        f"{date.name}/{path.relative_to(date)}" if date else f"{path.parent.name}/{path.name}"
+    )
     return {
-        "archive_id": f"{path.parent.name}/{path.name}",
-        "date": path.parent.name,
+        "archive_id": archive_id,
+        "date": date.name if date else path.parent.name,
         "path": str(path),
         "timestamp": runs[0]["timestamp"] if runs else "",
         "run_count": run_count,
@@ -105,13 +148,21 @@ def _summarize_trace_archive(path: Path) -> Dict[str, Any]:
 
 
 def list_trace_archives() -> List[Dict[str, Any]]:
-    """List dated trace archives under results/YYYY-MM-DD/*."""
+    """List dated trace archives under results/YYYY-MM-DD/*.
+
+    Since runs are now grouped by victim model
+    (results/YYYY-MM-DD/<victim>/HH-MM-SS_µs/run_*.json), archives are
+    discovered recursively under each date directory.
+    """
     ensure_results_dir()
     archives: List[Dict[str, Any]] = []
     for day_dir in sorted(
         [p for p in RESULTS_DIR.iterdir() if p.is_dir() and len(p.name) == 10 and p.name[4] == "-" and p.name[7] == "-"]
     ):
-        for archive_dir in sorted([p for p in day_dir.iterdir() if p.is_dir() and list(p.glob("run_*.json"))]):
+        archive_dirs: set[Path] = set()
+        for run_file in day_dir.rglob("run_*.json"):
+            archive_dirs.add(run_file.parent)
+        for archive_dir in sorted(archive_dirs, key=lambda p: p.stat().st_mtime):
             archives.append(_summarize_trace_archive(archive_dir))
     return archives
 
@@ -131,7 +182,8 @@ def list_benchmarks(limit: Optional[int] = None, offset: int = 0) -> List[Dict[s
 
         metadata = data.get("metadata", {})
         timestamp = metadata.get("timestamp", "")
-        trace_archives = _trace_archives_for_timestamp(timestamp)
+        victim_name = data.get("models", {}).get("victim", {}).get("name", "")
+        trace_archives = _trace_archives_for_timestamp(timestamp, victim_name=victim_name)
         benchmarks.append({
             "benchmark_id": benchmark_dir.name,
             "file_path": str(summary_file),
@@ -166,7 +218,11 @@ def get_benchmark(benchmark_id: str) -> Optional[Dict[str, Any]]:
 
     metadata = data.get("metadata", {})
     timestamp = metadata.get("timestamp", "")
-    trace_archives = [_summarize_trace_archive(path) for path in _trace_archives_for_timestamp(timestamp)]
+    victim_name = data.get("models", {}).get("victim", {}).get("name", "")
+    trace_archives = [
+        _summarize_trace_archive(path)
+        for path in _trace_archives_for_timestamp(timestamp, victim_name=victim_name)
+    ]
     trace_runs = []
     for archive in trace_archives:
         trace_runs.extend(archive.get("runs", []))
