@@ -189,6 +189,19 @@ _VICTIM_MAX_MODEL_LEN = int(
 # graph capture causes OOM.
 _ENFORCE_EAGER = os.environ.get("AUTORED_ENFORCE_EAGER", "0") == "1"
 
+# Optional vLLM quantization for the victim model (e.g., "bitsandbytes" for
+# 4-bit in-flight quantization, "awq", "gptq"). The model checkpoint must
+# support the chosen quantization method, or vLLM must support in-flight
+# quantization for it (BitsAndBytes does for most HF models).
+_VICTIM_QUANTIZATION = os.environ.get("AUTORED_VICTIM_QUANTIZATION", None)
+
+
+def _model_dir_name(model_id: str) -> str:
+    """Turn a Hugging Face model id into a filesystem-safe directory name."""
+    import re
+
+    return re.sub(r"[\\/:\s]+", "--", model_id).strip("-") or "unknown-model"
+
 
 def _sanitize_victim_config(model_path: str) -> None:
     """Patch head_dim into the cached config when it is unset.
@@ -286,15 +299,19 @@ def _load_models():
     print(f"\n[LOAD] Loading {LLAMA_PATH} (target LLM)...")
     _sanitize_victim_config(LLAMA_PATH)
     t0 = time.time()
-    llama_model = LLM(
-        model=LLAMA_PATH,
-        trust_remote_code=_TRUST_REMOTE_CODE,
-        tokenizer_mode=_TOKENIZER_MODE,
-        gpu_memory_utilization=_GPU_MEMORY_UTILIZATION,
-        tensor_parallel_size=1,
-        max_model_len=_VICTIM_MAX_MODEL_LEN,
-        enforce_eager=_ENFORCE_EAGER,
-    )
+    victim_kwargs = {
+        "model": LLAMA_PATH,
+        "trust_remote_code": _TRUST_REMOTE_CODE,
+        "tokenizer_mode": _TOKENIZER_MODE,
+        "gpu_memory_utilization": _GPU_MEMORY_UTILIZATION,
+        "tensor_parallel_size": 1,
+        "max_model_len": _VICTIM_MAX_MODEL_LEN,
+        "enforce_eager": _ENFORCE_EAGER,
+    }
+    if _VICTIM_QUANTIZATION:
+        victim_kwargs["quantization"] = _VICTIM_QUANTIZATION
+        print(f"[LOAD] Using victim quantization: {_VICTIM_QUANTIZATION}")
+    llama_model = LLM(**victim_kwargs)
     llama_tokenizer = llama_model.get_tokenizer()
     MODEL_LOAD_TIME["victim"] = time.time() - t0
     print(f"[LOAD] ✓ {LLAMA_PATH} loaded ({MODEL_LOAD_TIME['victim']:.1f}s)")
@@ -345,35 +362,51 @@ def _max_victim_prompt_tokens(max_new_tokens: int = 200) -> int:
     return max_model_len - max_new_tokens - 10
 
 
+def _build_victim_prompt(messages: list, tokenizer, max_prompt_tokens: int):
+    """Return a vLLM-safe prompt dict, hard-clipping at the token level if needed.
+
+    First applies the chat template and performs content-aware system/defense
+    truncation. If the resulting tokenized prompt is still too long (e.g. because
+    a user attack message is very long), it drops tokens from the front so the
+    worker never dies with a max_model_len error.
+    """
+    # Initial content-aware truncation of the system/defense message.
+    trimmed = _truncate_system_content_to_fit(messages, tokenizer, max_prompt_tokens)
+    token_ids = tokenizer.apply_chat_template(
+        trimmed, tokenize=True, add_generation_prompt=True, return_tensors=None
+    )
+
+    # Defense in depth: never let a prompt exceed the victim budget.
+    if len(token_ids) > max_prompt_tokens:
+        clipped_len = max_prompt_tokens
+        print(
+            f"    [WARN] Hard-clipping {len(token_ids)} token victim prompt to "
+            f"{clipped_len} tokens (keep tail)"
+        )
+        token_ids = token_ids[-clipped_len:]
+
+    return {"prompt_token_ids": token_ids}
+
+
 def chat_with_llama_messages_batch(messages_batch: list) -> list:
     if not messages_batch:
         return []
-    if llama_tokenizer.pad_token is None:
-        llama_tokenizer.pad_token = llama_tokenizer.eos_token
-    original_padding_side = llama_tokenizer.padding_side
-    llama_tokenizer.padding_side = "left"
 
     max_tokens = 200
     max_prompt_tokens = _max_victim_prompt_tokens(max_tokens)
 
-    prompts = []
-    for messages in messages_batch:
-        trimmed = _truncate_system_content_to_fit(messages, llama_tokenizer, max_prompt_tokens)
-        prompts.append(
-            llama_tokenizer.apply_chat_template(
-                trimmed, tokenize=False, add_generation_prompt=True
-            )
-        )
+    prompts = [
+        _build_victim_prompt(messages, llama_tokenizer, max_prompt_tokens)
+        for messages in messages_batch
+    ]
 
     print(f"    [DEBUG] chat_with_llama_messages_batch: generating for {len(messages_batch)} conversations...", flush=True)
     t0 = time.time()
-    
+
     sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
     outputs = llama_model.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
-    
-    print(f"    [DEBUG] chat_with_llama_messages_batch: generation complete in {time.time() - t0:.2f}s.", flush=True)
 
-    llama_tokenizer.padding_side = original_padding_side
+    print(f"    [DEBUG] chat_with_llama_messages_batch: generation complete in {time.time() - t0:.2f}s.", flush=True)
 
     responses = []
     for output in outputs:
@@ -387,10 +420,6 @@ def chat_with_llama_batch(
 ) -> list:
     if not attacks:
         return []
-    if llama_tokenizer.pad_token is None:
-        llama_tokenizer.pad_token = llama_tokenizer.eos_token
-    original_padding_side = llama_tokenizer.padding_side
-    llama_tokenizer.padding_side = "left"
 
     max_tokens = 200
     max_prompt_tokens = _max_victim_prompt_tokens(max_tokens)
@@ -401,22 +430,15 @@ def chat_with_llama_batch(
             {"role": "system", "content": f"{pre}\n\n{post}"},
             {"role": "user", "content": attack},
         ]
-        trimmed = _truncate_system_content_to_fit(messages, llama_tokenizer, max_prompt_tokens)
-        prompts.append(
-            llama_tokenizer.apply_chat_template(
-                trimmed, tokenize=False, add_generation_prompt=True
-            )
-        )
+        prompts.append(_build_victim_prompt(messages, llama_tokenizer, max_prompt_tokens))
 
     print(f"    [DEBUG] chat_with_llama_batch: generating for {len(attacks)} attacks...", flush=True)
     t0 = time.time()
-    
+
     sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
     outputs = llama_model.generate(prompts, sampling_params=sampling_params, use_tqdm=False)
-    
-    print(f"    [DEBUG] chat_with_llama_batch: generation complete in {time.time() - t0:.2f}s.", flush=True)
 
-    llama_tokenizer.padding_side = original_padding_side
+    print(f"    [DEBUG] chat_with_llama_batch: generation complete in {time.time() - t0:.2f}s.", flush=True)
 
     responses = []
     for output in outputs:
@@ -445,10 +467,7 @@ def chat_with_llama(pre_defense: str, attack: str, post_defense: str) -> str:
 
     max_tokens = 200
     max_prompt_tokens = _max_victim_prompt_tokens(max_tokens)
-    trimmed = _truncate_system_content_to_fit(messages, llama_tokenizer, max_prompt_tokens)
-    prompt = llama_tokenizer.apply_chat_template(
-        trimmed, tokenize=False, add_generation_prompt=True
-    )
+    prompt = _build_victim_prompt(messages, llama_tokenizer, max_prompt_tokens)
 
     sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.9)
     outputs = llama_model.generate([prompt], sampling_params=sampling_params, use_tqdm=False)
@@ -3805,10 +3824,12 @@ def verbose_test_llama(
         raw_dataset_entry=raw_dataset_entry,
     )
 
-    # Save to results directory
+    # Save to results directory, grouped by victim model so different targets
+    # do not end up mixed under the same date folder.
     results_dir = (
         Path("results")
         / run_started_at.strftime("%Y-%m-%d")
+        / _model_dir_name(LLAMA_PATH)
         / run_started_at.strftime("%H-%M-%S_%f")
     )
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -4333,10 +4354,11 @@ def run_benchmark(
         json.dump(benchmark, f, indent=2)
     print(f"\n[JSON] Benchmark summary saved to: {benchmark_path}")
 
-    # JSON emission: save per-round run JSONs
+    # JSON emission: save per-round run JSONs grouped by victim model.
     results_dir = (
         Path("results")
         / benchmark_started_at.strftime("%Y-%m-%d")
+        / _model_dir_name(LLAMA_PATH)
         / benchmark_started_at.strftime("%H-%M-%S_%f")
     )
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -5526,6 +5548,17 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--victim-quantization",
+        type=str,
+        default=_VICTIM_QUANTIZATION,
+        help=(
+            "Optional vLLM quantization method for the victim model. "
+            "Use 'bitsandbytes' for 4-bit in-flight quantization, "
+            "or 'awq'/'gptq' if the checkpoint is already quantized. "
+            "Can also be set with AUTORED_VICTIM_QUANTIZATION."
+        ),
+    )
+    parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
         default=_GPU_MEMORY_UTILIZATION,
@@ -5611,6 +5644,8 @@ if __name__ == "__main__":
     _SHARED_GPU_MEMORY_UTILIZATION = args.shared_gpu_memory_utilization
     _VICTIM_MAX_MODEL_LEN = args.victim_max_model_len
     _ENFORCE_EAGER = args.enforce_eager or _ENFORCE_EAGER
+    if args.victim_quantization:
+        _VICTIM_QUANTIZATION = args.victim_quantization
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:
