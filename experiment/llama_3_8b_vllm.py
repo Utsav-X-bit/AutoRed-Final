@@ -157,9 +157,10 @@ LLAMA_PATH = os.environ.get(
 )
 
 # Some Hugging Face models (e.g. internlm/internlm2-chat-7b) ship custom Python
-# modeling/tokenizer files. Set this flag (or AUTORED_TRUST_REMOTE_CODE=1) to
-# allow their execution when loading the victim LLM.
-_TRUST_REMOTE_CODE = os.environ.get("AUTORED_TRUST_REMOTE_CODE", "0") == "1"
+# modeling/tokenizer files. Trust remote code by default so those models can be
+# benchmarked without extra flags. Disable with AUTORED_TRUST_REMOTE_CODE=0 or
+# --no-trust-remote-code.
+_TRUST_REMOTE_CODE = os.environ.get("AUTORED_TRUST_REMOTE_CODE", "1") == "1"
 
 # vLLM tokenizer mode for the victim model. "mistral" is strongly recommended
 # for Mistral-family models; defaults to "auto".
@@ -663,6 +664,7 @@ def _load_shared_lora_base(base_model_path: str):
         max_model_len=2048,
         enforce_eager=_ENFORCE_EAGER,
         enable_prefix_caching=True,
+        trust_remote_code=_TRUST_REMOTE_CODE,
     )
     shared_lora_tokenizer = shared_lora_model.get_tokenizer()
     return shared_lora_tokenizer, shared_lora_model
@@ -5579,11 +5581,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--trust-remote-code",
         action="store_true",
+        default=_TRUST_REMOTE_CODE,
         help=(
             "Trust remote code when loading the victim model. "
             "Required for some models such as internlm/internlm2-chat-7b. "
-            "Can also be enabled with AUTORED_TRUST_REMOTE_CODE=1."
+            "On by default; use --no-trust-remote-code to disable. "
+            "Can also be set with AUTORED_TRUST_REMOTE_CODE=1/0."
         ),
+    )
+    parser.add_argument(
+        "--no-trust-remote-code",
+        action="store_false",
+        dest="trust_remote_code",
+        help="Do not trust remote code when loading the victim model.",
     )
     parser.add_argument(
         "--tokenizer-mode",
@@ -5711,7 +5721,7 @@ if __name__ == "__main__":
     # mode, and GPU memory fraction to be overridden on the CLI.
     LLAMA_PATH = args.victim_model_id
     MAX_INTERACTIONS = args.max_attempts
-    _TRUST_REMOTE_CODE = args.trust_remote_code or _TRUST_REMOTE_CODE
+    _TRUST_REMOTE_CODE = args.trust_remote_code
     _TOKENIZER_MODE = args.tokenizer_mode
     _GPU_MEMORY_UTILIZATION = args.gpu_memory_utilization
     _SHARED_GPU_MEMORY_UTILIZATION = args.shared_gpu_memory_utilization
