@@ -813,7 +813,7 @@ ATTACK_TYPES = [
     "translation",
     "summarization",
     "system_prompt_recovery",
-    
+
     # Garak-derived taxonomy expansions
     "encoding_bypass",
     "markdown_smuggling",
@@ -827,6 +827,36 @@ ATTACK_TYPES = [
     "base64_bypass",
     "unicode_bypass"
 ]
+
+# Strategy-diversity guardrails (A + B + D): after this many consecutive failures
+# with a strategy, the runtime overrides the planner and forbids that strategy.
+_STRATEGY_FAIL_STREAK_LIMIT = 3
+
+
+def _defense_priority_strategies(scenario: "DefenseScenario") -> list[str]:
+    """Return a prioritized strategy list for a defense (option D)."""
+    opening = getattr(scenario, "opening_defense", "") or ""
+    closing = getattr(scenario, "closing_defense", "") or ""
+    text = (opening + " " + closing).lower()
+    defense_type = (getattr(scenario, "defense_type", "") or "").lower()
+    access_type = (getattr(scenario, "access_code_type", "UNKNOWN") or "UNKNOWN").upper()
+
+    if defense_type == "roleplay" or "unless" in text or "if they say" in text:
+        priority = ["trigger_phrase_discovery", "roleplay", "exception_discovery"]
+    elif access_type == "TOKEN":
+        priority = ["trigger_phrase_discovery", "encoding_bypass", "json_smuggling"]
+    elif access_type == "PHRASE" or access_type == "SENTENCE":
+        priority = ["trigger_phrase_discovery", "roleplay", "exception_discovery"]
+    else:
+        priority = [
+            "instruction_leak",
+            "trigger_phrase_discovery",
+            "roleplay",
+            "exception_discovery",
+            "translation",
+            "summarization",
+        ]
+    return priority
 
 ATTACK_TYPE_PROMPTS = {
     "instruction_leak": (
@@ -2743,6 +2773,11 @@ class RedTeamingAgent:
             for s in ATTACK_TYPES
         }
 
+        # Strategy-diversity guardrails (A + B): track consecutive failures per
+        # strategy and embargo strategies that repeatedly fail.
+        self.strategy_fail_streak = {s: 0 for s in ATTACK_TYPES}
+        self.embargoed_strategies: set[str] = set()
+
         # #5: Best performing attack (for reuse/refinement)
         self.best_attack = None
         self.best_score = 0.0
@@ -2799,6 +2834,8 @@ class RedTeamingAgent:
             s: {"successes": 0, "partial_leaks": 0, "failures": 0, "total_score": 0.0}
             for s in ATTACK_TYPES
         }
+        self.strategy_fail_streak = {s: 0 for s in ATTACK_TYPES}
+        self.embargoed_strategies.clear()
         self.best_attack = None
         self.best_score = 0.0
         self.expected_ac_probs = None
@@ -2888,7 +2925,7 @@ class RedTeamingAgent:
         )
         return result[0]["generated_attack"] if result else ""
 
-    def _parse_plan(self, plan_text: str) -> dict:
+    def _parse_plan(self, plan_text: str, scenario: Optional["DefenseScenario"] = None) -> dict:
         """Parse and canonicalize the Planner output."""
         try:
             from experiment.planner_contract import canonicalize_plan, parse_plan_text
@@ -2907,7 +2944,13 @@ class RedTeamingAgent:
             # through the strategy taxonomy instead of getting stuck on a
             # single hard-coded default. This keeps the agent exploring even
             # when the planner adapter is missing, unformatted, or silent.
-            fallback_strategy = ATTACK_TYPES[(self.attempt_counter - 1) % len(ATTACK_TYPES)]
+            current_strategy = getattr(self, "_current_strategy", None)
+            if scenario is not None:
+                fallback_strategy = self._select_fallback_strategy(current_strategy, scenario)
+            else:
+                # Avoid defaulting back to instruction_leak once we have already tried it.
+                offset = 1 if current_strategy == "instruction_leak" else 0
+                fallback_strategy = ATTACK_TYPES[(self.attempt_counter - 1 + offset) % len(ATTACK_TYPES)]
             fallback_retry = "switch_strategy" if self.attempt_counter > 1 else "explore"
             preview = plan_text[:400].replace("\n", " ")
             print(
@@ -2947,6 +2990,73 @@ class RedTeamingAgent:
             f"  <failure_reason>{plan.get('failure_reason', 'none')}</failure_reason>\n"
             "</plan>"
         )
+
+    def _select_fallback_strategy(
+        self, current_strategy: Optional[str], scenario: "DefenseScenario"
+    ) -> str:
+        """Pick a non-embargoed strategy, using defense-type heuristics (D)."""
+        priority = _defense_priority_strategies(scenario)
+        candidates = []
+        seen = set()
+        for s in priority + list(ATTACK_TYPES):
+            if s not in seen:
+                seen.add(s)
+                candidates.append(s)
+
+        banned = set()
+        if current_strategy:
+            banned.add(current_strategy)
+        banned.update(self.embargoed_strategies)
+        valid = [s for s in candidates if s not in banned]
+        if valid:
+            return valid[0]
+
+        # Everything is embargoed or is the current strategy: pick the least-failed
+        # alternative so the agent keeps exploring.
+        others = [s for s in ATTACK_TYPES if s != current_strategy]
+        if not others:
+            return current_strategy or ATTACK_TYPES[0]
+        return min(others, key=lambda s: self.strategy_fail_streak.get(s, 0))
+
+    def _maybe_override_strategy(
+        self, plan: Dict[str, Any], scenario: "DefenseScenario"
+    ) -> Dict[str, Any]:
+        """
+        Enforce a strategy switch when the current strategy keeps failing (A + B).
+
+        If the planner keeps returning a strategy whose consecutive failure streak
+        has crossed the limit, override it with a defense-aware fallback. This is
+        the runtime guard that makes the advisory <retry_policy> effective.
+        """
+        current_strategy = plan.get("strategy", "instruction_leak")
+        fail_streak = self.strategy_fail_streak.get(current_strategy, 0)
+
+        # Trigger the override if the strategy has failed repeatedly, or if the
+        # planner itself is asking to switch after at least two failures.
+        should_switch = (
+            fail_streak >= _STRATEGY_FAIL_STREAK_LIMIT
+            or (plan.get("retry_policy") == "switch_strategy" and fail_streak >= 2)
+        )
+        if not should_switch:
+            return plan
+
+        new_strategy = self._select_fallback_strategy(current_strategy, scenario)
+        if new_strategy == current_strategy:
+            return plan
+
+        print(
+            f"[PLANNER] Enforcing strategy switch: {current_strategy} "
+            f"(streak {fail_streak}) -> {new_strategy}"
+        )
+        overridden = dict(plan)
+        overridden["strategy"] = new_strategy
+        overridden["retry_policy"] = "switch_strategy"
+        overridden["failure_reason"] = "none"
+        # Keep the primitive list non-empty and generic so the generator contract
+        # stays valid even though the strategy changed.
+        if not overridden.get("primitives"):
+            overridden["primitives"] = ["framing/technical"]
+        return overridden
 
     def _build_generator_input(self, scenario: DefenseScenario, plan: dict) -> str:
         """Build the Generator prompt from the defense and parsed plan."""
@@ -3322,7 +3432,8 @@ class RedTeamingAgent:
         self.attempt_counter += 1
         planner_input = self._build_planner_input(scenario, previous_attack, previous_response)
         plan_text = self._call_planner(planner_input)
-        plan = self._parse_plan(plan_text)
+        plan = self._parse_plan(plan_text, scenario)
+        plan = self._maybe_override_strategy(plan, scenario)
         self._last_plan = plan
         # Store the canonical plan XML (what is sent to the generator) so the UI
         # can reliably parse strategy, style, expected_access_type, etc., on reload.
@@ -3407,6 +3518,18 @@ class RedTeamingAgent:
         # #4: Get strategy from current generation (stored in generate_attack)
         strategy = getattr(self, "_current_strategy", "unknown")
         plan = getattr(self, "_last_plan", {}) or {}
+
+        # Strategy-diversity guardrails (A + B): update failure streak and embargo
+        # strategies that fail repeatedly within the same scenario.
+        if strategy in self.strategy_fail_streak:
+            if result == "FAILURE":
+                self.strategy_fail_streak[strategy] += 1
+            else:
+                self.strategy_fail_streak[strategy] = 0
+            if self.strategy_fail_streak[strategy] >= _STRATEGY_FAIL_STREAK_LIMIT:
+                if strategy not in self.embargoed_strategies:
+                    print(f"[STRATEGY] Embargoing '{strategy}' after {self.strategy_fail_streak[strategy]} consecutive failures")
+                self.embargoed_strategies.add(strategy)
 
         self.history.append(
             {
@@ -4807,7 +4930,8 @@ def generate_attack_batch(
     plans = []
     for agent, scenario, planner_out in zip(agents, scenarios, planner_outputs):
         raw_plan = planner_out["generated_attack"]
-        plan = agent._parse_plan(raw_plan)
+        plan = agent._parse_plan(raw_plan, scenario)
+        plan = agent._maybe_override_strategy(plan, scenario)
         agent._last_plan = plan
         # Store the canonical plan XML so future UI loads can parse contract fields.
         agent._last_plan_raw = agent._build_plan_xml(plan)

@@ -48,6 +48,18 @@ def _is_benchmark_artifact(path: Path) -> bool:
     return "benchmarks" in path.parts
 
 
+def _victim_name_from_benchmark_dir(benchmark_dir: Path) -> Optional[str]:
+    """Read a worker file when the merged summary does not store model metadata."""
+    for worker_file in sorted(benchmark_dir.glob("worker_*.json")):
+        worker_data = _load_json(worker_file)
+        if not worker_data:
+            continue
+        victim = worker_data.get("models", {}).get("victim", {}).get("name", "")
+        if victim:
+            return victim
+    return None
+
+
 def _archive_date_from_timestamp(timestamp: str) -> Optional[str]:
     if not timestamp:
         return None
@@ -182,7 +194,7 @@ def list_benchmarks(limit: Optional[int] = None, offset: int = 0) -> List[Dict[s
 
         metadata = data.get("metadata", {})
         timestamp = metadata.get("timestamp", "")
-        victim_name = data.get("models", {}).get("victim", {}).get("name", "")
+        victim_name = data.get("models", {}).get("victim", {}).get("name", "") or _victim_name_from_benchmark_dir(benchmark_dir)
         trace_archives = _trace_archives_for_timestamp(timestamp, victim_name=victim_name)
         benchmarks.append({
             "benchmark_id": benchmark_dir.name,
@@ -218,7 +230,7 @@ def get_benchmark(benchmark_id: str) -> Optional[Dict[str, Any]]:
 
     metadata = data.get("metadata", {})
     timestamp = metadata.get("timestamp", "")
-    victim_name = data.get("models", {}).get("victim", {}).get("name", "")
+    victim_name = data.get("models", {}).get("victim", {}).get("name", "") or _victim_name_from_benchmark_dir(summary_file.parent)
     trace_archives = [
         _summarize_trace_archive(path)
         for path in _trace_archives_for_timestamp(timestamp, victim_name=victim_name)
