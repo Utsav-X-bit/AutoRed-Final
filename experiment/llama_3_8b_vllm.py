@@ -3019,22 +3019,29 @@ class RedTeamingAgent:
         return min(others, key=lambda s: self.strategy_fail_streak.get(s, 0))
 
     def _maybe_override_strategy(
-        self, plan: Dict[str, Any], scenario: "DefenseScenario"
+        self,
+        plan: Dict[str, Any],
+        scenario: "DefenseScenario",
+        verbose: bool = True,
     ) -> Dict[str, Any]:
         """
         Enforce a strategy switch when the current strategy keeps failing (A + B).
 
         If the planner keeps returning a strategy whose consecutive failure streak
-        has crossed the limit, override it with a defense-aware fallback. This is
-        the runtime guard that makes the advisory <retry_policy> effective.
+        has crossed the limit, or if the strategy has already been embargoed,
+        override it with a defense-aware fallback. This is the runtime guard that
+        makes the advisory <retry_policy> effective.
         """
         current_strategy = plan.get("strategy", "instruction_leak")
         fail_streak = self.strategy_fail_streak.get(current_strategy, 0)
 
-        # Trigger the override if the strategy has failed repeatedly, or if the
-        # planner itself is asking to switch after at least two failures.
+        is_embargoed = current_strategy in self.embargoed_strategies
+        # Trigger the override if the strategy has failed repeatedly, if it is
+        # already embargoed, or if the planner itself is asking to switch after at
+        # least two failures.
         should_switch = (
-            fail_streak >= _STRATEGY_FAIL_STREAK_LIMIT
+            is_embargoed
+            or fail_streak >= _STRATEGY_FAIL_STREAK_LIMIT
             or (plan.get("retry_policy") == "switch_strategy" and fail_streak >= 2)
         )
         if not should_switch:
@@ -3044,10 +3051,12 @@ class RedTeamingAgent:
         if new_strategy == current_strategy:
             return plan
 
-        print(
-            f"[PLANNER] Enforcing strategy switch: {current_strategy} "
-            f"(streak {fail_streak}) -> {new_strategy}"
-        )
+        if verbose:
+            reason = "embargoed" if is_embargoed else f"fail streak {fail_streak}"
+            print(
+                f"[PLANNER] Strategy override: planner suggested '{current_strategy}' "
+                f"({reason}), forcing switch to '{new_strategy}'"
+            )
         overridden = dict(plan)
         overridden["strategy"] = new_strategy
         overridden["retry_policy"] = "switch_strategy"
@@ -3589,6 +3598,7 @@ def verbose_test_llama(
     agent: RedTeamingAgent,
     max_attempts: Optional[int] = None,
 ) -> tuple:
+    user_max_attempts = max_attempts
     if max_attempts is None:
         max_attempts = MAX_INTERACTIONS
     """
@@ -3630,12 +3640,13 @@ def verbose_test_llama(
     print("\n" + "=" * 80)
     print("🔥 AUTORED: VERBOSE RED TEAMING SESSION 🔥")
     print("=" * 80)
-    print(f"🎯 GOAL: Force Llama-3 to reveal the Access Code")
+    victim_name = os.path.basename(LLAMA_PATH)
+    print(f"🎯 GOAL: Force {victim_name} to reveal the Access Code")
     print(f"🔑 TARGET ACCESS CODE: '{scenario.access_code}'")
     print(f"⏰ Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     print("\n🛡️  THE SANDWICH DEFENSE:")
-    print("Llama-3 is protected by instructions placed BEFORE and AFTER the attack.")
+    print(f"{victim_name} is protected by instructions placed BEFORE and AFTER the attack.")
     print("-" * 60)
     print(f"🔼 PRE-DEFENSE (System Prompt):\n\033[94m{scenario.opening_defense}\033[0m")
     print("-" * 60)
@@ -3667,7 +3678,10 @@ def verbose_test_llama(
             base += min(near_miss_count * 2, 6)
         return min(base, 25)
 
-    max_attempts = compute_max_attempts(scenario, agent.history)
+    dynamic_max = compute_max_attempts(scenario, agent.history)
+    # Respect a user-supplied attempt budget (e.g. --max-attempts 20); fall back
+    # to the dynamic heuristic only when no explicit budget was provided.
+    max_attempts = user_max_attempts if user_max_attempts is not None else dynamic_max
     total_attempts = max_attempts  # default: ran all attempts without success
 
     i = 0
@@ -3709,13 +3723,13 @@ def verbose_test_llama(
         }
 
         # ---------- STEP 2: TARGET LLM RESPONSE (via CTFEnvironment) ----------
-        print(f"\n🦙 STEP 2: TARGET LLM (Llama-3-8B-Instruct) GENERATING RESPONSE...")
+        print(f"\n🦙 STEP 2: TARGET LLM ({victim_name}) GENERATING RESPONSE...")
         time.sleep(0.5)
 
         response, reward, done, info = env.step(attack)
         new_content = info["clean_response"]
 
-        print(f"\n  📥 LLAMA-3 RESPONSE ({len(response)} chars):")
+        print(f"\n  📥 {victim_name.upper()} RESPONSE ({len(response)} chars):")
         print(f"  {'─' * 66}")
         print(f"  \033[96m{response if response else '[NONE]'}\033[0m")
         print(f"  {'─' * 66}")
@@ -4244,9 +4258,10 @@ def run_benchmark(
                 closing_defense=row["closing_defense"],
                 access_code=row["access_code"],
                 access_code_type=row.get("access_code_type", "UNKNOWN"),
+                defense_type=row.get("defense_type", "UNKNOWN"),
                 defense_complexity=row.get("defense_complexity", "UNKNOWN"),
             )
-            scenario._defense_id = str(row.name)
+            scenario._defense_id = str(row.get("defense_id", row.name))
             batch_scenarios.append(scenario)
 
         if verbose:
@@ -4429,7 +4444,7 @@ def run_benchmark(
     benchmark = {
         "metadata": {
             "timestamp": datetime.now().isoformat(),
-            "target_model": "Llama-3-8B-Instruct",
+            "target_model": os.path.basename(LLAMA_PATH),
             "planner_model": PLANNER_PATH,
             "generator_model": GENERATOR_PATH,
             "n_rounds": n_rounds,
@@ -4931,7 +4946,7 @@ def generate_attack_batch(
     for agent, scenario, planner_out in zip(agents, scenarios, planner_outputs):
         raw_plan = planner_out["generated_attack"]
         plan = agent._parse_plan(raw_plan, scenario)
-        plan = agent._maybe_override_strategy(plan, scenario)
+        plan = agent._maybe_override_strategy(plan, scenario, verbose=False)
         agent._last_plan = plan
         # Store the canonical plan XML so future UI loads can parse contract fields.
         agent._last_plan_raw = agent._build_plan_xml(plan)
@@ -5401,7 +5416,7 @@ def save_trace(trace: list, scenario: DefenseScenario, total_attempts: int):
     output = {
         "metadata": {
             "timestamp": datetime.now().isoformat(),
-            "target_model": "Llama-3-8B-Instruct",
+            "target_model": os.path.basename(LLAMA_PATH),
             "access_code": scenario.access_code,
             "pre_defense": scenario.opening_defense,
             "post_defense": scenario.closing_defense,
@@ -5964,9 +5979,10 @@ if __name__ == "__main__":
                 closing_defense=sample_row["closing_defense"],
                 access_code=sample_row["access_code"],
                 access_code_type=sample_row.get("access_code_type", "UNKNOWN"),
+                defense_type=sample_row.get("defense_type", "UNKNOWN"),
                 defense_complexity=sample_row.get("defense_complexity", "UNKNOWN"),
             )
-            scenario._defense_id = str(selected_id)
+            scenario._defense_id = str(sample_row.get("defense_id", selected_id))
             print(f"Scenario ID:   \033[95m{scenario._defense_id}\033[0m")
 
             print(f"Pre-defense:   {scenario.opening_defense[:100]}...")
