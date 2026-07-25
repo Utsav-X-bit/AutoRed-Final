@@ -54,6 +54,7 @@ usage() {
     echo "  --shared-gpu-memory-utilization F vLLM GPU memory fraction for shared planner/generator (default: 0.55)"
     echo "  --victim-max-model-len N         vLLM max_model_len for the victim model; lower reduces KV cache (default: 2048)"
     echo "  --victim-quantization METHOD    vLLM quantization for victim (e.g., bitsandbytes, awq, gptq)"
+    echo "  --mutation-fallback              Enable JailGuard mutation fallback on failed scenarios"
     exit 0
 }
 
@@ -75,6 +76,10 @@ while [[ $# -gt 0 ]]; do
         --shared-gpu-memory-utilization) SHARED_GPU_MEMORY_UTILIZATION="$2"; shift 2 ;;
         --victim-max-model-len) VICTIM_MAX_MODEL_LEN="$2"; shift 2 ;;
         --victim-quantization) VICTIM_QUANTIZATION="$2"; shift 2 ;;
+        --mutation-fallback|--enable-mutation-fallback)
+            MUTATION_FALLBACK=1
+            shift
+            ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -149,6 +154,12 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
     echo "[LAUNCH] Worker $WORKER_ID on GPU $GPU_ID (Processing 16 scenarios at a time)"
     echo "         Output: $WORKER_OUTPUT"
 
+    WORKER_EXTRA_ARGS=""
+    if [ "${MUTATION_FALLBACK:-0}" = "1" ]; then
+        WORKER_EXTRA_ARGS="--enable-mutation-fallback"
+        export AUTORED_MUTATION_FALLBACK=1
+    fi
+
     # Launch worker on specific GPU — use env to ensure CUDA_VISIBLE_DEVICES
     # is set in the process, not just the shell variable
     env CUDA_VISIBLE_DEVICES=$GPU_ID python experiment/llama_3_8b_vllm.py \
@@ -171,6 +182,7 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         $( [ -n "$BASE_GENERATOR_PATH" ] && echo "--base-generator-path $BASE_GENERATOR_PATH" ) \
         $( [ -n "$DATASET_PATH" ] && echo "--dataset-path $DATASET_PATH" ) \
         $( [ -n "$START_IDX" ] && echo "--start-idx $START_IDX" ) \
+        $WORKER_EXTRA_ARGS \
         > "$WORKER_LOG" 2>&1 &
 
     PIDS+=($!)

@@ -97,6 +97,35 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ./hpc/autored_benchmark_4gpu_vllm.sh \
 
 If `--output-dir` is omitted, it defaults to `results/benchmarks/batched_${NUM_ROUNDS}r_4gpu`. `--attempts` (alias `--max-attempts`) controls the per-scenario attempt limit and defaults to 20. Use `--trust-remote-code` for models such as `internlm/internlm2-chat-7b` that ship custom Python files. Use `--tokenizer-mode mistral` only for newer Mistral checkpoints that ship Mistral-format tokenizer files; otherwise leave it as `auto`.
 
+### Mutation Fallback (Combination Project — Judge-Independent)
+
+When enabled, the benchmark invokes JailGuard text mutators as an offensive
+prompt fuzzer on scenarios where all AutoRed attempts fail. The best-scoring
+failed attack is selected using **judge-independent `fallback_score`** (keyword
+signals + extractor results only — no DistilBERT judge confidence), then mutated
+into 8 variants (Synonym Replacement, Punctuation Insertion, Translation). Each
+variant is sent to the victim LLM. This can recover +2–6% net success rate on
+borderline defenses.
+
+```bash
+# Enable via CLI flag
+VLLM_USE_V1=0 python experiment/llama_3_8b_vllm.py \
+  --mode benchmark --rounds 1000 \
+  --enable-mutation-fallback
+
+# Or via env var
+AUTORED_MUTATION_FALLBACK=1 VLLM_USE_V1=0 python experiment/llama_3_8b_vllm.py \
+  --mode benchmark --rounds 1000
+
+# HPC wrapper
+./hpc/autored_benchmark_4gpu_vllm.sh --rounds 1000 --mutation-fallback
+```
+
+The fallback only triggers when `fallback_score >= 0.25` (near-miss filter,
+judge-independent) and uses structure-preserving mutators to avoid corrupting
+base64/XML payloads. Results appear in the benchmark summary under
+`mutation_fallback_triggered` and `mutation_fallback_successes`.
+
 ### Auto-update KB / DB / RAG
 
 The runtime can automatically keep the knowledge stores fresh after each run or benchmark:
