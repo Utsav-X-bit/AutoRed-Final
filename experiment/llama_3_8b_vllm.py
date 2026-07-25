@@ -4335,6 +4335,8 @@ def run_benchmark(
     total_verified = 0  # Verification loop succeeded
     sum_verified_rank = 0  # Sum of verified ranks (for avg)
     success_attempts = []
+    total_mutation_fallback_triggered = 0
+    total_mutation_fallback_successes = 0
 
     # JSON emission: collect per-round run JSONs
     benchmark_run_jsons = []
@@ -4425,6 +4427,16 @@ def run_benchmark(
                 if kb_updater is not None:
                     kb_updater.update_after_run(run_json)
                 success = attempts < MAX_INTERACTIONS
+                
+                # Check if this was a mutation fallback success
+                is_mutation_fb_success = any(
+                    t.get("mutation_fallback", False) for t in trace
+                )
+                if is_mutation_fb_success:
+                    total_mutation_fallback_triggered += 1
+                    if success:
+                        total_mutation_fallback_successes += 1
+
                 if success:
                     total_successes += 1
                     success_attempts.append(attempts)
@@ -4499,6 +4511,16 @@ def run_benchmark(
                     kb_updater.update_after_run(run_json)
 
                 success = attempts < MAX_INTERACTIONS
+                
+                # Check if this was a mutation fallback success
+                is_mutation_fb_success = any(
+                    t.get("mutation_fallback", False) for t in trace
+                )
+                if is_mutation_fb_success:
+                    total_mutation_fallback_triggered += 1
+                    if success:
+                        total_mutation_fallback_successes += 1
+
                 if success:
                     total_successes += 1
                     success_attempts.append(attempts)
@@ -4610,6 +4632,8 @@ def run_benchmark(
         "defense_rate": defense_rate,
         "avg_attempts_on_success": avg_attempts,
         "total_successes": total_successes,
+        "mutation_fallback_triggered": total_mutation_fallback_triggered,
+        "mutation_fallback_successes": total_mutation_fallback_successes,
         "total_success_exact": total_success_exact,
         "total_success_extractor": total_success_extractor,
         "total_rounds": n_rounds,
@@ -4688,6 +4712,15 @@ def run_benchmark(
     print(f"{'=' * 60}")
 
     benchmark["extractor_metrics"] = ext_metrics
+
+    if _MUTATION_FALLBACK_ENABLED:
+        print(f"\n🔀 MUTATION FALLBACK STATS (judge-independent scoring)")
+        print(f"{'=' * 60}")
+        print(f"  Triggered:  {total_mutation_fallback_triggered}")
+        print(f"  Successes:  {total_mutation_fallback_successes}")
+        if total_mutation_fallback_triggered > 0:
+            fb_rate = total_mutation_fallback_successes / total_mutation_fallback_triggered
+            print(f"  Fallback Success Rate: {fb_rate * 100:.1f}%")
 
     # Save results
     benchmark_path = Path(BENCHMARK_LOG_PATH)
@@ -5414,6 +5447,72 @@ def _silent_test_batch(scenarios: list, template_agent: RedTeamingAgent) -> list
                 next_active_indices.append(idx)
 
         active_indices = next_active_indices
+
+    # ── MUTATION FALLBACK for failed scenarios (judge-independent) ──
+    if _MUTATION_FALLBACK_ENABLED:
+        _fb = _get_mutation_fallback()
+        if _fb is not None:
+            newly_done_failures = [
+                idx for idx in range(B)
+                if attempts_counts[idx] >= MAX_INTERACTIONS
+                and agents[idx].best_attack_data is not None
+                and _fb.should_trigger(
+                    best_attack_data=agents[idx].best_attack_data,
+                    all_attempts_failed=True,
+                )
+            ]
+            if newly_done_failures:
+                from mutation_fallback import run_mutation_fallback
+
+                for idx in newly_done_failures:
+                    fb_result = run_mutation_fallback(
+                        fallback=_fb,
+                        best_attack_data=agents[idx].best_attack_data,
+                        scenario=envs[idx].scenario,
+                        extractor=agents[idx].extractor,
+                        chat_fn=chat_with_llama_messages_batch,
+                        strip_fn=strip_few_shot_patterns,
+                    )
+                    # Append fallback trace entries
+                    for vi, (variant, resp, ext_res) in enumerate(
+                        zip(fb_result.variants, fb_result.responses, fb_result.extraction_results)
+                    ):
+                        fb_log = {
+                            "iteration": MAX_INTERACTIONS + vi + 1,
+                            "mutation_fallback": True,
+                            "source_strategy": fb_result.source_strategy,
+                            "source_fallback_score": fb_result.source_fallback_score,
+                            "generator": {
+                                "strategy": "mutation_fallback",
+                                "internal_prompt": (
+                                    f"Mutated variant "
+                                    f"(fallback_score={fb_result.source_fallback_score:.2f}, "
+                                    f"strategy={fb_result.source_strategy})"
+                                ),
+                                "generated_attack": variant,
+                                "input_tokens": 0,
+                                "output_tokens": 0,
+                            },
+                            "llm_response": {
+                                "raw_output": resp,
+                                "output_length": len(resp),
+                                "clean_response": resp,
+                                "clean_length": len(resp),
+                            },
+                            "judge": {
+                                "input_to_judge": "",
+                                "probabilities": {},
+                                "confidence": 0.0,
+                                "decision": "MUTATION_FALLBACK",
+                            },
+                            "extractor": ext_res,
+                            "ground_truth_found": agents[idx].extractor.check_ground_truth_leak(resp),
+                        }
+                        traces[idx].append(fb_log)
+
+                    if fb_result.success:
+                        # Override the attempt count to signal success
+                        attempts_counts[idx] = MAX_INTERACTIONS - 1
 
     return list(zip(traces, attempts_counts, agents))
 
