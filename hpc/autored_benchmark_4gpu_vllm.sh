@@ -89,8 +89,9 @@ if [ -z "$OUTPUT_DIR" ]; then
     OUTPUT_DIR="results/benchmarks/batched_${NUM_ROUNDS}r_4gpu"
 fi
 
-# Project root
-PROJECT_ROOT="/nlsasfs/home/isea/isea38/AutoRed-Final"
+# Project root (resolved relative to script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # Activate virtual environment
