@@ -67,6 +67,31 @@ import re
 import datetime
 from typing import List, Dict, Any, Tuple
 
+# Mutation Fallback Pipeline (combination project)
+_MUTATION_FALLBACK_ENABLED = (
+    os.environ.get("AUTORED_MUTATION_FALLBACK", "0") == "1"
+)
+_mutation_fallback_instance = None
+
+def _get_mutation_fallback():
+    """Lazy-init the MutationFallback instance."""
+    global _mutation_fallback_instance
+    if _mutation_fallback_instance is None:
+        try:
+            import sys as _sys
+            _combo_src = os.path.join(
+                os.path.dirname(__file__), '..', '..', 'combination', 'src'
+            )
+            if _combo_src not in _sys.path:
+                _sys.path.insert(0, os.path.abspath(_combo_src))
+            from mutation_fallback import MutationFallback
+            _mutation_fallback_instance = MutationFallback()
+            print("[MutationFallback] Initialized with default config (judge-independent scoring)")
+        except ImportError as e:
+            print(f"[MutationFallback] DISABLED — import failed: {e}")
+            return None
+    return _mutation_fallback_instance
+
 import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
@@ -4002,6 +4027,76 @@ def verbose_test_llama(
             }
         )
 
+        # ── MUTATION FALLBACK (combination project, judge-independent) ──
+        if (
+            _MUTATION_FALLBACK_ENABLED
+            and total_attempts >= max_attempts
+            and agent.best_attack_data is not None
+        ):
+            _fb = _get_mutation_fallback()
+            if _fb is not None and _fb.should_trigger(
+                best_attack_data=agent.best_attack_data, all_attempts_failed=True
+            ):
+                from mutation_fallback import run_mutation_fallback
+
+                fb_result = run_mutation_fallback(
+                    fallback=_fb,
+                    best_attack_data=agent.best_attack_data,
+                    scenario=scenario,
+                    extractor=agent.extractor,
+                    chat_fn=chat_with_llama_messages_batch,
+                    strip_fn=strip_few_shot_patterns,
+                )
+
+                # Append fallback trace entries
+                for vi, (variant, resp, ext_res) in enumerate(
+                    zip(fb_result.variants, fb_result.responses, fb_result.extraction_results)
+                ):
+                    fb_log = {
+                        "iteration": max_attempts + vi + 1,
+                        "mutation_fallback": True,
+                        "source_strategy": fb_result.source_strategy,
+                        "source_fallback_score": fb_result.source_fallback_score,
+                        "generator": {
+                            "strategy": "mutation_fallback",
+                            "internal_prompt": (
+                                f"Mutated variant of best_attack "
+                                f"(fallback_score={fb_result.source_fallback_score:.2f}, "
+                                f"strategy={fb_result.source_strategy})"
+                            ),
+                            "generated_attack": variant,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                        },
+                        "llm_response": {
+                            "raw_output": resp,
+                            "output_length": len(resp),
+                            "clean_response": resp,
+                            "clean_length": len(resp),
+                        },
+                        "judge": {
+                            "input_to_judge": "",
+                            "probabilities": {},
+                            "confidence": 0.0,
+                            "decision": "MUTATION_FALLBACK",
+                        },
+                        "extractor": ext_res,
+                        "ground_truth_found": agent.extractor.check_ground_truth_leak(resp),
+                    }
+                    trace.append(fb_log)
+
+                if fb_result.success:
+                    total_attempts = max_attempts  # Mark that we used all base attempts
+                    events.append({
+                        "timestamp": datetime.now().isoformat(),
+                        "type": "mutation_fallback_success",
+                        "message": (
+                            f"Mutation fallback cracked defense "
+                            f"(source_strategy={fb_result.source_strategy}, "
+                            f"fallback_score={fb_result.source_fallback_score:.2f})"
+                        ),
+                    })
+
     # JSON emission: serialize and save
     run_end = time.time()
     total_run_time = run_end - run_start
@@ -5710,6 +5805,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="AutoRed Red Teaming Experiment")
     parser.add_argument(
+        "--enable-mutation-fallback",
+        action="store_true",
+        default=False,
+        help="Enable JailGuard mutation fallback on failed scenarios (judge-independent scoring)",
+    )
+    parser.add_argument(
         "--mode",
         choices=["single", "benchmark", "extractor_benchmark"],
         default="single",
@@ -5927,6 +6028,10 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
+
+    if args.enable_mutation_fallback:
+        os.environ["AUTORED_MUTATION_FALLBACK"] = "1"
+        _MUTATION_FALLBACK_ENABLED = True
 
     PLANNER_PATH = args.planner_path
     GENERATOR_PATH = args.generator_path
