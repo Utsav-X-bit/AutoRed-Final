@@ -4341,6 +4341,7 @@ def run_benchmark(
     success_attempts = []
     total_mutation_fallback_triggered = 0
     total_mutation_fallback_successes = 0
+    failure_mode_stats = {}
 
     # JSON emission: collect per-round run JSONs
     benchmark_run_jsons = []
@@ -4487,12 +4488,32 @@ def run_benchmark(
                             if ext.get("verified_candidate"):
                                 sum_verified_rank += ext.get("verified_rank", 0)
                                 break
+                scenario_success_path = success_path if success else "none"
+                if is_mutation_fb_success and success:
+                    scenario_success_path = "fallback"
+                if not success:
+                    best_fs = (
+                        agent.best_attack_data.get("fallback_score", 0.0)
+                        if getattr(agent, "best_attack_data", None) else 0.0
+                    )
+                    fmode = classify_failure_mode(trace, is_mutation_fb_success, best_fs)
+                    failure_mode_stats[fmode] = failure_mode_stats.get(fmode, 0) + 1
+                else:
+                    fmode = "none"
+                best_strategy = (
+                    agent.best_attack_data.get("strategy")
+                    if getattr(agent, "best_attack_data", None) else None
+                )
                 results.append(
                     {
                         "round": batch_start + i + 1,
                         "attempts": attempts,
                         "success": success,
                         "access_code": batch_df.iloc[i]["access_code"],
+                        "success_path": scenario_success_path,
+                        "fallback_triggered": is_mutation_fb_success,
+                        "best_strategy": best_strategy,
+                        "failure_mode": fmode,
                     }
                 )
         else:
@@ -4606,12 +4627,39 @@ def run_benchmark(
                     "false_negative"
                 ]
 
+                # Determine per-scenario success path + failure mode
+                if success:
+                    round_sp = classify_success(
+                        round_success_exact, round_success_extractor, round_verified
+                    )
+                else:
+                    round_sp = "none"
+                scenario_success_path = round_sp if success else "none"
+                if is_mutation_fb_success and success:
+                    scenario_success_path = "fallback"
+                if not success:
+                    best_fs = (
+                        batch_agent.best_attack_data.get("fallback_score", 0.0)
+                        if getattr(batch_agent, "best_attack_data", None) else 0.0
+                    )
+                    fmode = classify_failure_mode(trace, is_mutation_fb_success, best_fs)
+                    failure_mode_stats[fmode] = failure_mode_stats.get(fmode, 0) + 1
+                else:
+                    fmode = "none"
+                best_strategy = (
+                    batch_agent.best_attack_data.get("strategy")
+                    if getattr(batch_agent, "best_attack_data", None) else None
+                )
                 results.append(
                     {
                         "round": global_round_idx + 1,
                         "attempts": attempts,
                         "success": success,
                         "access_code": row["access_code"],
+                        "success_path": scenario_success_path,
+                        "fallback_triggered": is_mutation_fb_success,
+                        "best_strategy": best_strategy,
+                        "failure_mode": fmode,
                     }
                 )
 
@@ -4650,6 +4698,8 @@ def run_benchmark(
             sum_verified_rank / total_verified if total_verified else 0
         ),
         "per_type_stats": per_type_stats,
+        "failure_mode_stats": failure_mode_stats,
+        "failure_mode_stats": failure_mode_stats,
         "results": results,
     }
 
