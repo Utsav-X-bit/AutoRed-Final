@@ -61,6 +61,26 @@ def merge_benchmarks(worker_paths: list[str], output_path: str) -> dict:
     total_top5 = sum(w.get("top5_success", 0) for w in workers)
     total_verified = sum(w.get("verified_success", 0) for w in workers)
 
+    # Mutation fallback + failure-mode stats (preserved through merge)
+    total_mutation_triggered = sum(w.get("mutation_fallback_triggered", 0) for w in workers)
+    total_mutation_successes = sum(w.get("mutation_fallback_successes", 0) for w in workers)
+
+    # Failure-mode stats (sum per-label across workers)
+    combined_failure_modes = {}
+    for w in workers:
+        for mode, count in w.get("failure_mode_stats", {}).items():
+            combined_failure_modes[mode] = combined_failure_modes.get(mode, 0) + count
+
+    # Mutation fallback + failure-mode stats (preserved through merge)
+    total_mutation_triggered = sum(w.get("mutation_fallback_triggered", 0) for w in workers)
+    total_mutation_successes = sum(w.get("mutation_fallback_successes", 0) for w in workers)
+
+    # Failure-mode stats (sum per-label across workers)
+    combined_failure_modes = {}
+    for w in workers:
+        for mode, count in w.get("failure_mode_stats", {}).items():
+            combined_failure_modes[mode] = combined_failure_modes.get(mode, 0) + count
+
     # Collect all per-round results
     all_results = []
     for w in workers:
@@ -139,6 +159,14 @@ def merge_benchmarks(worker_paths: list[str], output_path: str) -> dict:
         "total_successes": total_successes,
         "total_success_exact": total_success_exact,
         "total_success_extractor": total_success_extractor,
+        "mutation_fallback_triggered": total_mutation_triggered,
+        "mutation_fallback_successes": total_mutation_successes,
+        "gt_leak_rate": (total_success_exact / total_rounds) if total_rounds > 0 else 0.0,
+        "extractor_recovery_rate": (
+            combined_tp / (combined_tp + combined_fn)
+            if (combined_tp + combined_fn) > 0 else 0.0
+        ),
+        "failure_mode_stats": combined_failure_modes,
         "total_rounds": total_rounds,
         # Top-K metrics
         "top1_success": total_top1,
