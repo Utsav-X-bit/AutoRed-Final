@@ -71,16 +71,6 @@ def merge_benchmarks(worker_paths: list[str], output_path: str) -> dict:
         for mode, count in w.get("failure_mode_stats", {}).items():
             combined_failure_modes[mode] = combined_failure_modes.get(mode, 0) + count
 
-    # Mutation fallback + failure-mode stats (preserved through merge)
-    total_mutation_triggered = sum(w.get("mutation_fallback_triggered", 0) for w in workers)
-    total_mutation_successes = sum(w.get("mutation_fallback_successes", 0) for w in workers)
-
-    # Failure-mode stats (sum per-label across workers)
-    combined_failure_modes = {}
-    for w in workers:
-        for mode, count in w.get("failure_mode_stats", {}).items():
-            combined_failure_modes[mode] = combined_failure_modes.get(mode, 0) + count
-
     # Collect all per-round results
     all_results = []
     for w in workers:

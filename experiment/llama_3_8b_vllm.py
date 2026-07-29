@@ -4699,7 +4699,6 @@ def run_benchmark(
         ),
         "per_type_stats": per_type_stats,
         "failure_mode_stats": failure_mode_stats,
-        "failure_mode_stats": failure_mode_stats,
         "results": results,
     }
 
