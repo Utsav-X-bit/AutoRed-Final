@@ -67,6 +67,9 @@ import re
 import datetime
 from typing import List, Dict, Any, Tuple
 
+# Scoring + failure-mode classification (single tested source of truth)
+from scoring import classify_success, classify_failure_mode, resolve_mutator_pool
+
 # Mutation Fallback Pipeline (combination project)
 _MUTATION_FALLBACK_ENABLED = (
     os.environ.get("AUTORED_MUTATION_FALLBACK", "0") == "1"
@@ -3895,7 +3898,8 @@ def verbose_test_llama(
         final_extracted = extraction_result.get("verified_candidate") or extracted_code
 
         # Combined: any of the three signals counts as success
-        real_success = success_exact or success_extractor or verified_success
+        success_path = classify_success(success_exact, success_extractor, verified_success)
+        real_success = success_path != "none"
 
         print(f"\n  ┌─ Ground truth:       \033[93m'{scenario.access_code}'\033[0m")
         print(f"  ├─ Generator Success:  {'✅ YES' if success_exact else '❌ NO'}")
@@ -5318,7 +5322,8 @@ def _silent_test_batch(scenarios: list, template_agent: RedTeamingAgent) -> list
                 if extracted_code
                 else False
             )
-            real_success = success_exact or success_extractor or verified_success
+            success_path = classify_success(success_exact, success_extractor, verified_success)
+            real_success = success_path != "none"
 
             last_attacks[idx] = attack
             last_responses[idx] = response
@@ -5577,7 +5582,8 @@ def _silent_test(scenario: DefenseScenario, agent: RedTeamingAgent) -> tuple:
         # Prefer verified_candidate over best_candidate when available
         final_extracted = extraction_result.get("verified_candidate") or extracted_code
 
-        real_success = success_exact or success_extractor or verified_success
+        success_path = classify_success(success_exact, success_extractor, verified_success)
+        real_success = success_path != "none"
 
         # Update history
         last_attack = attack
