@@ -55,6 +55,7 @@ usage() {
     echo "  --victim-max-model-len N         vLLM max_model_len for the victim model; lower reduces KV cache (default: 2048)"
     echo "  --victim-quantization METHOD    vLLM quantization for victim (e.g., bitsandbytes, awq, gptq)"
     echo "  --mutation-fallback              Enable JailGuard mutation fallback on failed scenarios"
+    echo "  --max-fallback-rounds N          Mutation fallback rounds (1 default, 2 adaptive)"
     exit 0
 }
 
@@ -80,6 +81,8 @@ while [[ $# -gt 0 ]]; do
             MUTATION_FALLBACK=1
             shift
             ;;
+        --max-fallback-rounds) MAX_FALLBACK_ROUNDS="$2"; shift 2 ;;
+        --max-fallback-rounds=*) MAX_FALLBACK_ROUNDS="${1#*=}"; shift ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -159,6 +162,10 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
     if [ "${MUTATION_FALLBACK:-0}" = "1" ]; then
         WORKER_EXTRA_ARGS="--enable-mutation-fallback"
         export AUTORED_MUTATION_FALLBACK=1
+        # Forward adaptive-round-2 setting when fallback is enabled.
+        if [ -n "${MAX_FALLBACK_ROUNDS:-}" ]; then
+            WORKER_EXTRA_ARGS="$WORKER_EXTRA_ARGS --max-fallback-rounds ${MAX_FALLBACK_ROUNDS}"
+        fi
     fi
 
     # Launch worker on specific GPU — use env to ensure CUDA_VISIBLE_DEVICES
