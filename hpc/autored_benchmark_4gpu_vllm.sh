@@ -29,6 +29,7 @@ VICTIM_MAX_MODEL_LEN=2048
 OUTPUT_DIR=""
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
+SEED="42"
 TRUST_REMOTE_CODE=0
 TOKENIZER_MODE="auto"
 VICTIM_QUANTIZATION=""
@@ -56,6 +57,8 @@ usage() {
     echo "  --victim-quantization METHOD    vLLM quantization for victim (e.g., bitsandbytes, awq, gptq)"
     echo "  --mutation-fallback              Enable JailGuard mutation fallback on failed scenarios"
     echo "  --max-fallback-rounds N          Mutation fallback rounds (1 default, 2 adaptive)"
+    echo "  --seed N                         Random seed for dataset sampling + fallback RNG (default: 42)."
+    echo "                                   Two runs sharing --seed and --start-idx are directly comparable."
     exit 0
 }
 
@@ -83,6 +86,8 @@ while [[ $# -gt 0 ]]; do
             ;;
         --max-fallback-rounds) MAX_FALLBACK_ROUNDS="$2"; shift 2 ;;
         --max-fallback-rounds=*) MAX_FALLBACK_ROUNDS="${1#*=}"; shift ;;
+        --seed) SEED="$2"; shift 2 ;;
+        --seed=*) SEED="${1#*=}"; shift ;;
         --help|-h) usage ;;
         *) echo "[ERROR] Unknown option: $1"; exit 1 ;;
     esac
@@ -131,6 +136,7 @@ echo "Victim Model : $VICTIM_MODEL_ID"
 if [ -n "$START_IDX" ]; then
     echo "Start Idx    : $START_IDX"
 fi
+echo "Seed         : $SEED"
 echo "Max Attempts : $MAX_ATTEMPTS"
 if [ "$TRUST_REMOTE_CODE" -eq 1 ]; then
     echo "Trust Remote : yes"
@@ -190,6 +196,7 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         $( [ -n "$BASE_GENERATOR_PATH" ] && echo "--base-generator-path $BASE_GENERATOR_PATH" ) \
         $( [ -n "$DATASET_PATH" ] && echo "--dataset-path $DATASET_PATH" ) \
         $( [ -n "$START_IDX" ] && echo "--start-idx $START_IDX" ) \
+        --seed "$SEED" \
         $WORKER_EXTRA_ARGS \
         > "$WORKER_LOG" 2>&1 &
 
