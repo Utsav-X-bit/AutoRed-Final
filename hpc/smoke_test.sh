@@ -38,7 +38,7 @@ BASE_GENERATOR_PATH="Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"
 DATASET_PATH="data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_deterministic_or_indirect.jsonl"
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 MAX_ATTEMPTS=20
-GPU_MEMORY_UTILIZATION=0.40
+GPU_MEMORY_UTILIZATION=0.43
 SHARED_GPU_MEMORY_UTILIZATION=0.55
 VICTIM_MAX_MODEL_LEN=2048
 TOKENIZER_MODE="auto"
@@ -185,16 +185,37 @@ fb_codes   = [r["access_code"] for r in fb["results"]]
 check("paired: same scenario set (seed/start-idx match)", base_codes == fb_codes,
       f"base={base_codes} fb={fb_codes}")
 
-# --- fallback subset property: fb-triggered ⊆ base failures ---
+# --- fallback triggered: informational, NOT a hard invariant ---
+# fb-triggered ⊆ base-failures only holds when the two runs are bit-identical.
+# We seed the dataset sampler (Task 7) and the fallback RNG, but NOT vLLM
+# inference sampling (generator runs at temp 0.7, victim also samples), so a
+# scenario can legitimately fail all regular attempts in the fb run (-> trigger
+# fallback) yet succeed in baseline. So this is reported as overlap, not gated.
 base_fail = {r["access_code"] for r in base["results"] if not r["success"]}
 fb_trig   = {r["access_code"] for r in fb["results"] if r.get("fallback_triggered")}
-# Only meaningful if any fallback actually triggered in the smoke.
 if fb_trig:
-    check("fb-triggered ⊆ base failures", fb_trig.issubset(base_fail),
-          f"fb_trig={fb_trig} base_fail={base_fail}")
+    overlap = fb_trig & base_fail
+    print(f"  [INFO] fb-triggered={len(fb_trig)} scenarios; "
+          f"{len(overlap)} also failed in baseline "
+          f"(overlap {100*len(overlap)/len(fb_trig):.0f}%). Non-overlap is "
+          f"expected — vLLM inference is not seeded, so the two runs are not "
+          f"bit-identical.")
+    # Hard-check internal consistency per ROW (access_code is NOT unique across
+    # defenses, so key on the row itself): every row that triggered fallback must
+    # have recorded one of the two valid fallback outcomes — won via fallback,
+    # or labeled fallback_failed.
+    triggered_rows = [r for r in fb["results"] if r.get("fallback_triggered")]
+    bad_rows = [
+        r for r in triggered_rows
+        if r.get("success_path") != "fallback"
+        and r.get("failure_mode") != "fallback_failed"
+    ]
+    check("fb: every triggered scenario has a valid fallback outcome",
+          not bad_rows,
+          f"bad rows={[(r['access_code'], r.get('success_path'), r.get('failure_mode')) for r in bad_rows]}")
 else:
-    check("fb: fallback triggered at least once", False,
-          "(smoke too small — rerun with larger --rounds if you want a trigger)")
+    print("  [INFO] no fallback triggered on this smoke — rerun with larger "
+          "--rounds (e.g. 40) if you want to exercise the fallback path.")
 
 # --- report ---
 print()
