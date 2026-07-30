@@ -84,6 +84,9 @@ _mutation_fallback_instance = None
 _MUTATION_FALLBACK_MAX_ROUNDS = 1
 # Per-scenario planner temperature escalation (0.0 = off, default).
 _PLANNER_TEMP_ESCALATION = 0.0
+# Run seed, configured from CLI in __main__; recorded in saved JSON so a result
+# file is self-describing (replaces a hard-coded 42 that lied about the seed).
+_RUN_SEED = 42
 
 def _get_mutation_fallback():
     """Lazy-init the MutationFallback instance."""
@@ -108,6 +111,31 @@ def _get_mutation_fallback():
             print(f"[MutationFallback] DISABLED — import failed: {e}")
             return None
     return _mutation_fallback_instance
+
+
+def _winning_mutator_from_trace(trace) -> str | None:
+    """Attribute a fallback success to the mutator axis that cracked it.
+
+    Scans the trace for the first mutation_fallback variant that produced a
+    success (exact gt-leak, extractor match, or verification) and returns the
+    mutator name logged on that entry. Returns None when no fallback variant
+    succeeded. This is the attribution the merged summary previously lacked:
+    it lets per-mutator win counts (e.g. TL won 12/34) be aggregated across
+    workers at merge time, rather than being printed once and lost.
+    """
+    for t in trace:
+        if not t.get("mutation_fallback"):
+            continue
+        ext = t.get("extractor", {}) or {}
+        if (
+            t.get("ground_truth_found")
+            or ext.get("success_exact")
+            or ext.get("success_extractor")
+            or ext.get("verified_candidate")
+        ):
+            return t.get("mutator")
+    return None
+
 
 import torch
 import torch._dynamo
@@ -4100,7 +4128,11 @@ def verbose_test_llama(
                     strip_fn=strip_few_shot_patterns,
                 )
 
-                # Append fallback trace entries
+                # Append fallback trace entries (with per-variant mutator + no-op
+                # diagnostics so future analysis can attribute wins to a mutator and
+                # quantify wasted no-op queries, e.g. TL returning the seed offline).
+                _fb_mutators = fb_result.mutator_used_per_variant
+                _fb_noop = fb_result.no_op_per_variant
                 for vi, (variant, resp, ext_res) in enumerate(
                     zip(fb_result.variants, fb_result.responses, fb_result.extraction_results)
                 ):
@@ -4109,6 +4141,8 @@ def verbose_test_llama(
                         "mutation_fallback": True,
                         "source_strategy": fb_result.source_strategy,
                         "source_fallback_score": fb_result.source_fallback_score,
+                        "mutator": _fb_mutators[vi] if vi < len(_fb_mutators) else None,
+                        "variant_no_op": bool(_fb_noop[vi]) if vi < len(_fb_noop) else None,
                         "generator": {
                             "strategy": "mutation_fallback",
                             "internal_prompt": (
@@ -4159,7 +4193,7 @@ def verbose_test_llama(
         "average_attempt_time": total_run_time / len(trace) if trace else 0,
         "max_attempts": max_attempts,
         "dataset_size": len(defender_df),
-        "seed": 42,
+        "seed": _RUN_SEED,
     }
 
     model_info = {
@@ -4391,6 +4425,21 @@ def run_benchmark(
     total_mutation_fallback_triggered = 0
     total_mutation_fallback_successes = 0
     failure_mode_stats = {}
+    # Fallback diagnostics accumulated across all fallback invocations: which
+    # mutators were actually drawn, and how many variants were no-ops (== seed,
+    # i.e. the mutator had no effect — e.g. TL offline, SR with no WordNet syns).
+    # Aggregated from per-variant trace entries (mutator / variant_no_op).
+    # fb_mutator_counts: how often each mutator was DRAWN.
+    # fb_no_op_counts: how often each mutator produced a no-op variant. Combined
+    #   with fb_mutator_counts this gives a PER-MUTATOR no-op rate, so a single
+    #   broken mutator (e.g. all no-ops from TL) is isolated instead of hidden
+    #   behind the aggregate no_op_rate.
+    # fb_winning_mutator_counts: which mutator axis won each fallback success.
+    fb_mutator_counts: dict[str, int] = {}
+    fb_no_op_counts: dict[str, int] = {}
+    fb_winning_mutator_counts: dict[str, int] = {}
+    fb_variant_total = 0
+    fb_no_op_total = 0
 
     # Seed the mutation fallback's random module for reproducible mutator choice.
     # Two runs sharing --seed and --start-idx are directly comparable.
@@ -4496,6 +4545,24 @@ def run_benchmark(
                     total_mutation_fallback_triggered += 1
                     if success:
                         total_mutation_fallback_successes += 1
+                    # Accumulate per-variant mutator + no-op diagnostics.
+                    for t in trace:
+                        if t.get("mutation_fallback"):
+                            fb_variant_total += 1
+                            m = t.get("mutator")
+                            if m:
+                                fb_mutator_counts[m] = fb_mutator_counts.get(m, 0) + 1
+                            if t.get("variant_no_op"):
+                                fb_no_op_total += 1
+                                if m:
+                                    fb_no_op_counts[m] = fb_no_op_counts.get(m, 0) + 1
+                    # Attribute the win to the mutator that cracked it (if any).
+                    if success:
+                        wmut = _winning_mutator_from_trace(trace)
+                        if wmut:
+                            fb_winning_mutator_counts[wmut] = (
+                                fb_winning_mutator_counts.get(wmut, 0) + 1
+                            )
 
                 if success:
                     total_successes += 1
@@ -4567,6 +4634,11 @@ def run_benchmark(
                         "access_code": batch_df.iloc[i]["access_code"],
                         "success_path": scenario_success_path,
                         "fallback_triggered": is_mutation_fb_success,
+                        "winning_mutator": (
+                            _winning_mutator_from_trace(trace)
+                            if is_mutation_fb_success and success
+                            else None
+                        ),
                         "best_strategy": best_strategy,
                         "failure_mode": fmode,
                     }
@@ -4600,6 +4672,24 @@ def run_benchmark(
                     total_mutation_fallback_triggered += 1
                     if success:
                         total_mutation_fallback_successes += 1
+                    # Accumulate per-variant mutator + no-op diagnostics.
+                    for t in trace:
+                        if t.get("mutation_fallback"):
+                            fb_variant_total += 1
+                            m = t.get("mutator")
+                            if m:
+                                fb_mutator_counts[m] = fb_mutator_counts.get(m, 0) + 1
+                            if t.get("variant_no_op"):
+                                fb_no_op_total += 1
+                                if m:
+                                    fb_no_op_counts[m] = fb_no_op_counts.get(m, 0) + 1
+                    # Attribute the win to the mutator that cracked it (if any).
+                    if success:
+                        wmut = _winning_mutator_from_trace(trace)
+                        if wmut:
+                            fb_winning_mutator_counts[wmut] = (
+                                fb_winning_mutator_counts.get(wmut, 0) + 1
+                            )
 
                 if success:
                     total_successes += 1
@@ -4713,6 +4803,11 @@ def run_benchmark(
                         "access_code": row["access_code"],
                         "success_path": scenario_success_path,
                         "fallback_triggered": is_mutation_fb_success,
+                        "winning_mutator": (
+                            _winning_mutator_from_trace(trace)
+                            if is_mutation_fb_success and success
+                            else None
+                        ),
                         "best_strategy": best_strategy,
                         "failure_mode": fmode,
                     }
@@ -4734,6 +4829,13 @@ def run_benchmark(
             "max_interactions": MAX_INTERACTIONS,
             "worker_id": worker_id if num_workers > 1 else None,
             "num_workers": num_workers if num_workers > 1 else None,
+            # Run-config so a worker result file is self-describing: which
+            # seed, fallback / escalation settings, and dataset slice it ran.
+            "seed": _RUN_SEED,
+            "start_idx": start_idx,
+            "mutation_fallback_enabled": _MUTATION_FALLBACK_ENABLED,
+            "max_fallback_rounds": _MUTATION_FALLBACK_MAX_ROUNDS,
+            "planner_temp_escalation": _PLANNER_TEMP_ESCALATION,
         },
         "success_rate": success_rate,
         "defense_rate": defense_rate,
@@ -4741,6 +4843,25 @@ def run_benchmark(
         "total_successes": total_successes,
         "mutation_fallback_triggered": total_mutation_fallback_triggered,
         "mutation_fallback_successes": total_mutation_fallback_successes,
+        # Per-variant fallback diagnostics (aggregated across all invocations).
+        # mutator_counts: how often each mutator was actually DRAWN (round-robin).
+        # no_op_rate: fraction of variants byte-identical to the seed (wasted query).
+        # no_op_counts: per-mutator no-op counts — isolates which mutator wastes
+        #   queries instead of hiding it behind the aggregate no_op_rate.
+        # winning_mutator_counts: per-mutator win counts — attributes each fallback
+        #   success to the mutator axis that cracked it (e.g. TL won 12/34).
+        # A high no_op_rate signals a broken mutator pool (e.g. TL offline).
+        "mutation_fallback_diagnostics": {
+            "variant_total": fb_variant_total,
+            "no_op_total": fb_no_op_total,
+            "no_op_rate": (
+                round(fb_no_op_total / fb_variant_total, 4)
+                if fb_variant_total else 0.0
+            ),
+            "mutator_counts": dict(sorted(fb_mutator_counts.items())),
+            "no_op_counts": dict(sorted(fb_no_op_counts.items())),
+            "winning_mutator_counts": dict(sorted(fb_winning_mutator_counts.items())),
+        },
         "total_success_exact": total_success_exact,
         "total_success_extractor": total_success_extractor,
         "total_rounds": n_rounds,
@@ -4829,6 +4950,14 @@ def run_benchmark(
         if total_mutation_fallback_triggered > 0:
             fb_rate = total_mutation_fallback_successes / total_mutation_fallback_triggered
             print(f"  Fallback Success Rate: {fb_rate * 100:.1f}%")
+        if fb_variant_total > 0:
+            print(f"  Variants generated: {fb_variant_total}  "
+                  f"(no-op == seed: {fb_no_op_total} = "
+                  f"{fb_no_op_total/fb_variant_total*100:.1f}%)")
+            print(f"  Mutator draws: {dict(sorted(fb_mutator_counts.items()))}")
+            if fb_no_op_total / fb_variant_total > 0.25:
+                print(f"  ⚠️  High no-op rate — a mutator pool is likely offline/broken "
+                      f"(e.g. TL without internet, or SR without nltk WordNet).")
 
     # Save results
     benchmark_path = Path(BENCHMARK_LOG_PATH)
@@ -4920,7 +5049,7 @@ def _build_benchmark_run_json(
         "average_attempt_time": 0,
         "max_attempts": MAX_INTERACTIONS,
         "dataset_size": len(defender_df),
-        "seed": 42,
+        "seed": _RUN_SEED,
     }
 
     model_info = {
@@ -4979,9 +5108,17 @@ def _build_benchmark_run_json(
         }
     ]
 
+    # Attribute a fallback win to the mutator axis that cracked it (None unless
+    # a mutation_fallback variant won). Derived from the normalized trace so the
+    # per-scenario run JSON is self-describing for post-run win attribution.
+    _winning_mutator = _winning_mutator_from_trace(normalized_trace)
     summary_dict = {
         "total_attempts": attempts,
         "success": attempts < MAX_INTERACTIONS,
+        "mutation_fallback": any(
+            t.get("mutation_fallback") for t in normalized_trace
+        ),
+        "winning_mutator": _winning_mutator,
     }
 
     return serialize_run(
@@ -5635,7 +5772,10 @@ def _silent_test_batch(scenarios: list, template_agent: RedTeamingAgent) -> list
                         chat_fn=chat_with_llama_messages_batch,
                         strip_fn=strip_few_shot_patterns,
                     )
-                    # Append fallback trace entries
+                    # Append fallback trace entries (with per-variant mutator + no-op
+                    # diagnostics for post-run attribution / wasted-query accounting).
+                    _fb_mutators = fb_result.mutator_used_per_variant
+                    _fb_noop = fb_result.no_op_per_variant
                     for vi, (variant, resp, ext_res) in enumerate(
                         zip(fb_result.variants, fb_result.responses, fb_result.extraction_results)
                     ):
@@ -5644,6 +5784,8 @@ def _silent_test_batch(scenarios: list, template_agent: RedTeamingAgent) -> list
                             "mutation_fallback": True,
                             "source_strategy": fb_result.source_strategy,
                             "source_fallback_score": fb_result.source_fallback_score,
+                            "mutator": _fb_mutators[vi] if vi < len(_fb_mutators) else None,
+                            "variant_no_op": bool(_fb_noop[vi]) if vi < len(_fb_noop) else None,
                             "generator": {
                                 "strategy": "mutation_fallback",
                                 "internal_prompt": (
@@ -6349,6 +6491,7 @@ if __name__ == "__main__":
     # current behavior).
     _MUTATION_FALLBACK_MAX_ROUNDS = getattr(args, "max_fallback_rounds", 1)
     _PLANNER_TEMP_ESCALATION = getattr(args, "planner_temp_escalation", 0.0)
+    _RUN_SEED = getattr(args, "seed", 42)
 
     # Configure the post-run KB/DB/RAG updater.
     if kb_updater is not None:
