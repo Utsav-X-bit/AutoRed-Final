@@ -107,11 +107,19 @@ def discover_benchmark_dirs(benchmarks_root: str):
     if not root.exists():
         return []
     candidates = []
-    for child in root.iterdir():
-        if not child.is_dir():
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name == "smoke":
             continue
+        # Flat (legacy): merged_summary.json directly under the dated folder.
         if (child / "merged_summary.json").exists() or list(child.glob("worker_*.json")):
             candidates.append(child)
+            continue
+        # Nested (Change 3): group/run/merged_summary.json — walk one level down.
+        for sub in sorted(child.iterdir()):
+            if not sub.is_dir() or sub.name == "smoke":
+                continue
+            if (sub / "merged_summary.json").exists() or list(sub.glob("worker_*.json")):
+                candidates.append(sub)
     return sorted(candidates, key=_benchmark_sort_key)
 
 
@@ -145,6 +153,12 @@ def resolve_benchmark_path(arg_value: str, benchmarks_root: str, kind: str, curr
 
 
 def resolve_trace_root_for_benchmark(benchmark_dir: Path, traces_root: str):
+    # Change 3: per-run trace JSONs now live inside the benchmark folder under
+    # runs/. Prefer that (self-contained) and fall back to the date-based glob.
+    runs_dir = benchmark_dir / "runs"
+    if runs_dir.exists() and list(runs_dir.glob("run_*.json")):
+        return runs_dir
+
     summary = _load_json(benchmark_dir / "merged_summary.json")
     ts = None
     if summary:

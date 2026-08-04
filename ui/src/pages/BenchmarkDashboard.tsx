@@ -17,6 +17,10 @@ import type {
   BenchmarkDetail,
   BenchmarkListItem,
   TraceRunListItem,
+  MutationFallbackDiagnostics,
+  PerMutatorDiagnostics,
+  SuccessPathBreakdownEntry,
+  FailureModeBreakdownEntry,
 } from '../types/autored';
 
 const numberFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
@@ -467,6 +471,9 @@ export default function BenchmarkDashboard() {
         </Panel>
       </section>
 
+      {/* JailGuard Mutation Fallback panel — only renders when fallback ran */}
+      {summary && <FallbackPanel summary={summary} />}
+
       <section className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Panel title="Trace Archives" className="xl:col-span-1">
           <div className="space-y-2">
@@ -670,6 +677,187 @@ function DetailRow(props: { label: string; value: string; mono?: boolean }) {
         {props.value}
       </p>
     </div>
+  );
+}
+
+// --- JailGuard Mutation Fallback panel (Change 2) ---
+// Renders the fallback diagnostics from merged_summary.json when mutation
+// fallback ran. Conditionally shown: hidden for benchmarks that didn't use
+// fallback (mutation_fallback_triggered falsy AND mutation_fallback_enabled
+// not true), so non-fallback runs stay uncluttered.
+
+const MUTATOR_ORDER = ['EN', 'PI', 'SR', 'TL'] as const;
+
+function FallbackPanel({ summary }: { summary: Record<string, any> }) {
+  const triggered: number = Number(summary?.mutation_fallback_triggered) || 0;
+  const successes: number = Number(summary?.mutation_fallback_successes) || 0;
+  const enabled: boolean = Boolean(summary?.metadata?.mutation_fallback_enabled);
+  if (!triggered && !enabled) return null; // non-fallback benchmark -> hide
+
+  const diag = summary?.mutation_fallback_diagnostics as MutationFallbackDiagnostics | undefined;
+  const conversion = triggered > 0 ? (successes / triggered) * 100 : 0;
+  const noOpRate = diag?.no_op_rate ?? 0;
+  const mutatorCounts: Record<string, number> = diag?.mutator_counts ?? {};
+  const perMutator: Record<string, PerMutatorDiagnostics> = diag?.per_mutator ?? {};
+  const successPaths: SuccessPathBreakdownEntry[] = summary?.success_path_breakdown ?? [];
+  const failureModes: FailureModeBreakdownEntry[] = summary?.failure_mode_breakdown ?? [];
+  const meta = summary?.metadata ?? {};
+
+  // Mutator draw-distribution bar chart data, ordered EN/PI/SR/TL then any extra.
+  const drawData = Object.keys(mutatorCounts)
+    .sort((a, b) => MUTATOR_ORDER.indexOf(a as any) - MUTATOR_ORDER.indexOf(b as any))
+    .map((m) => ({ mutator: m, drawn: mutatorCounts[m] }));
+
+  return (
+    <Panel title="JailGuard Mutation Fallback" className="xl:col-span-3">
+      {/* Summary metric row */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <MetricCard label="Fallback Triggered" value={formatNumber(triggered)} subtext="scenarios that entered fallback" delta="fallback" />
+        <MetricCard label="Fallback Successes" value={formatNumber(successes)} subtext="scenarios cracked by a variant" delta="fallback" />
+        <MetricCard label="Conversion Rate" value={pctFmt.format(conversion)} subtext="successes ÷ triggered" delta={conversion >= 20 ? 'above 20%' : 'below 20%'} positive={conversion >= 20} />
+        <MetricCard label="No-Op Rate" value={formatPct(noOpRate)} subtext="variants == seed (wasted queries)" delta={noOpRate <= 0.05 ? 'healthy' : 'check mutators'} positive={noOpRate <= 0.05} />
+      </div>
+
+      {/* Per-mutator table + draw distribution */}
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">Per-Mutator Attribution</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wider text-stone-500 dark:border-stone-800 dark:text-stone-400">
+                  <th className="py-2 pr-3">Mutator</th>
+                  <th className="py-2 pr-3">Drawn</th>
+                  <th className="py-2 pr-3">Wins</th>
+                  <th className="py-2 pr-3">Win Rate</th>
+                  <th className="py-2 pr-3">No-Op Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.keys(perMutator)
+                  .sort((a, b) => MUTATOR_ORDER.indexOf(a as any) - MUTATOR_ORDER.indexOf(b as any))
+                  .map((m) => {
+                    const pm = perMutator[m];
+                    return (
+                      <tr key={m} className="border-b border-stone-100 dark:border-stone-800">
+                        <td className="py-2 pr-3 font-mono text-stone-900 dark:text-stone-100">{m}</td>
+                        <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{formatNumber(pm.drawn)}</td>
+                        <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{formatNumber(pm.wins)}</td>
+                        <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{pctFmt.format(pm.win_rate * 100)}%</td>
+                        <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{pctFmt.format(pm.no_op_rate * 100)}%</td>
+                      </tr>
+                    );
+                  })}
+                {Object.keys(perMutator).length === 0 && (
+                  <tr><td colSpan={5} className="py-3 text-stone-500 dark:text-stone-400">No per-mutator diagnostics available.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">Mutator Draw Distribution</h3>
+          <div className="h-48">
+            {drawData.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={drawData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-stone-200 dark:text-stone-800" />
+                  <XAxis dataKey="mutator" tick={{ fontSize: 12, fill: 'currentColor' }} className="text-stone-600 dark:text-stone-400" />
+                  <YAxis tick={{ fill: 'currentColor' }} className="text-stone-600 dark:text-stone-400" />
+                  <Tooltip contentStyle={{ backgroundColor: 'var(--elevated)', borderColor: 'var(--border)', borderRadius: '0.5rem' }} itemStyle={{ color: 'currentColor' }} />
+                  <Bar dataKey="drawn" fill="#0d9488" name="Variants drawn" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-stone-500 dark:text-stone-400">No mutator draw data.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Success-path + failure-mode breakdown */}
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">Success Path Breakdown</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wider text-stone-500 dark:border-stone-800 dark:text-stone-400">
+                  <th className="py-2 pr-3">Path</th>
+                  <th className="py-2 pr-3">Count</th>
+                  <th className="py-2 pr-3">% Total</th>
+                  <th className="py-2 pr-3">% Successes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {successPaths.map((p) => (
+                  <tr key={p.path} className="border-b border-stone-100 dark:border-stone-800">
+                    <td className="py-2 pr-3 font-mono text-stone-900 dark:text-stone-100">{p.path}</td>
+                    <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{formatNumber(p.count)}</td>
+                    <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{pctFmt.format(p.pct_of_total)}%</td>
+                    <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{pctFmt.format(p.pct_of_successes)}%</td>
+                  </tr>
+                ))}
+                {successPaths.length === 0 && (
+                  <tr><td colSpan={4} className="py-3 text-stone-500 dark:text-stone-400">No success-path data.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">Failure Mode Breakdown</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wider text-stone-500 dark:border-stone-800 dark:text-stone-400">
+                  <th className="py-2 pr-3">Mode</th>
+                  <th className="py-2 pr-3">Count</th>
+                  <th className="py-2 pr-3">% Failures</th>
+                  <th className="py-2 pr-3">% Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {failureModes.map((m) => (
+                  <tr key={m.mode} className="border-b border-stone-100 dark:border-stone-800">
+                    <td className="py-2 pr-3 font-mono text-stone-900 dark:text-stone-100">{m.mode}</td>
+                    <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{formatNumber(m.count)}</td>
+                    <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{pctFmt.format(m.pct_of_failures)}%</td>
+                    <td className="py-2 pr-3 text-stone-600 dark:text-stone-400">{pctFmt.format(m.pct_of_total)}%</td>
+                  </tr>
+                ))}
+                {failureModes.length === 0 && (
+                  <tr><td colSpan={4} className="py-3 text-stone-500 dark:text-stone-400">No failure-mode data.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Run-config metadata */}
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">Fallback Run Config</h3>
+          <DetailRow label="Mutation Fallback Enabled" value={String(meta.mutation_fallback_enabled ?? 'n/a')} />
+          <DetailRow label="Max Fallback Rounds" value={formatNumber(meta.max_fallback_rounds)} />
+          <DetailRow label="Cooperative Seeding" value={String(meta.cooperative_seeding ?? 'n/a')} />
+          <DetailRow label="Cooperative N (BoN cap)" value={formatNumber(meta.cooperative_n)} />
+          <DetailRow label="Planner Temp Escalation" value={formatNumber(meta.planner_temp_escalation)} />
+          <DetailRow label="Seed" value={formatNumber(meta.seed)} />
+          <DetailRow label="Start Idx" value={formatNumber(meta.start_idx)} />
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">Leak &amp; Recovery Rates</h3>
+          <DetailRow label="GT Leak Rate" value={formatPct(summary?.gt_leak_rate)} />
+          <DetailRow label="Defense Rate" value={formatPct(summary?.defense_rate)} />
+          <DetailRow label="Extractor Recovery Rate" value={formatPct(summary?.extractor_recovery_rate)} />
+          <DetailRow label="Total Success (exact)" value={formatNumber(summary?.total_success_exact)} />
+          <DetailRow label="Total Success (extractor)" value={formatNumber(summary?.total_success_extractor)} />
+          <DetailRow label="Variants Generated" value={formatNumber(diag?.variant_total)} />
+        </div>
+      </div>
+    </Panel>
   );
 }
 

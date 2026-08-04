@@ -231,6 +231,13 @@ def merge_benchmarks(worker_paths: list[str], output_path: str) -> dict:
             "planner_temp_escalation": workers[0].get("metadata", {}).get(
                 "planner_temp_escalation", 0.0
             ),
+            # Task 3/5 (model-agnostic v2): cooperation-aware fallback config.
+            # Emitted by the runtime at llama_3_8b_vllm.py (metadata block); the
+            # UI surfaces these in the JailGuard fallback panel.
+            "cooperative_seeding": workers[0].get("metadata", {}).get(
+                "cooperative_seeding"
+            ),
+            "cooperative_n": workers[0].get("metadata", {}).get("cooperative_n"),
         },
         "success_rate": success_rate,
         "defense_rate": defense_rate,

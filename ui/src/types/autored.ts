@@ -293,3 +293,50 @@ export interface RunComplete {
   run_id: string;
   run: AutoRedRun;
 }
+
+// --- JailGuard Mutation Fallback diagnostics (Change 2) ---
+// Optional overlays on BenchmarkDetail.summary (Record<string, any>). The
+// merged_summary.json carries these when mutation fallback ran; the dashboard
+// renders them in a dedicated panel.
+
+export interface PerMutatorDiagnostics {
+  drawn: number;
+  no_op: number;
+  no_op_rate: number;
+  wins: number;
+  win_rate: number;
+}
+
+export interface MutationFallbackDiagnostics {
+  variant_total: number;
+  no_op_total: number;
+  no_op_rate: number;
+  mutator_counts: Record<string, number>;
+  no_op_counts: Record<string, number>;
+  winning_mutator_counts: Record<string, number>;
+  per_mutator: Record<string, PerMutatorDiagnostics>;
+}
+
+export interface SuccessPathBreakdownEntry {
+  path: string;
+  count: number;
+  pct_of_total: number;
+  pct_of_successes: number;
+}
+
+export interface FailureModeBreakdownEntry {
+  mode: string;
+  count: number;
+  pct_of_failures: number;
+  pct_of_total: number;
+}
+
+export interface FallbackRunConfig {
+  mutation_fallback_enabled?: boolean;
+  max_fallback_rounds?: number;
+  cooperative_seeding?: boolean;
+  cooperative_n?: number;
+  seed?: number;
+  start_idx?: number;
+  planner_temp_escalation?: number;
+}

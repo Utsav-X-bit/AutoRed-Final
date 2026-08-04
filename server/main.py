@@ -134,7 +134,7 @@ def api_list_benchmarks(limit: Optional[int] = Query(default=None, ge=0), offset
     return list_benchmarks(limit=limit, offset=offset)
 
 
-@app.get("/api/benchmarks/{benchmark_id}")
+@app.get("/api/benchmarks/{benchmark_id:path}")
 def api_get_benchmark(benchmark_id: str):
     """Get benchmark summary plus associated trace archives."""
     benchmark = get_benchmark(benchmark_id)

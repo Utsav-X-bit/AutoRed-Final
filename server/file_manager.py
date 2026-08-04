@@ -48,6 +48,44 @@ def _is_benchmark_artifact(path: Path) -> bool:
     return "benchmarks" in path.parts
 
 
+# Regex matching the run-timestamp suffix in a flat benchmark folder name:
+# ..._{YYYY-MM-DD}_{HH-MM-SS}_{N}g  (the legacy flat layout before Change 3).
+_FLAT_RUN_SUFFIX_RE = re.compile(r"_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\d+)g$")
+
+
+def _is_flat_run_dir(name: str) -> bool:
+    """True if a directory name is a legacy flat benchmark run (date baked in)."""
+    return bool(_FLAT_RUN_SUFFIX_RE.search(name))
+
+
+def _discover_benchmark_dirs() -> List[Path]:
+    """Discover benchmark run dirs, supporting both nested and flat layouts.
+
+    Nested (Change 3):  results/benchmarks/{group}/{run}/merged_summary.json
+    Flat (legacy):      results/benchmarks/{group}_{run_suffix}/merged_summary.json
+
+    Returns the run-level dirs (the ones that directly contain merged_summary.json
+    or worker_*.json). 'smoke/' is a special case and skipped.
+    """
+    if not BENCHMARKS_DIR.exists():
+        return []
+    dirs: List[Path] = []
+    for child in sorted(BENCHMARKS_DIR.iterdir()):
+        if not child.is_dir() or child.name == "smoke":
+            continue
+        # Flat layout: merged_summary.json directly under the dated folder.
+        if (child / "merged_summary.json").exists() or list(child.glob("worker_*.json")):
+            dirs.append(child)
+            continue
+        # Nested layout: group/run/merged_summary.json — walk one level down.
+        for sub in sorted(child.iterdir()):
+            if not sub.is_dir() or sub.name == "smoke":
+                continue
+            if (sub / "merged_summary.json").exists() or list(sub.glob("worker_*.json")):
+                dirs.append(sub)
+    return dirs
+
+
 def _victim_name_from_benchmark_dir(benchmark_dir: Path) -> Optional[str]:
     """Read a worker file when the merged summary does not store model metadata."""
     for worker_file in sorted(benchmark_dir.glob("worker_*.json")):
@@ -70,8 +108,21 @@ def _archive_date_from_timestamp(timestamp: str) -> Optional[str]:
 
 
 def _trace_archives_for_timestamp(
-    timestamp: str, victim_name: Optional[str] = None
+    timestamp: str, victim_name: Optional[str] = None,
+    benchmark_dir: Optional[Path] = None,
 ) -> List[Path]:
+    # Change 3: per-run trace JSONs now live inside the benchmark folder under
+    # runs/. Prefer that location (self-contained benchmark) and fall back to
+    # the legacy date-based glob for flat/un-migrated folders.
+    if benchmark_dir is not None:
+        runs_dir = benchmark_dir / "runs"
+        if runs_dir.exists():
+            archive_dirs: set[Path] = set()
+            for run_file in runs_dir.glob("run_*.json"):
+                archive_dirs.add(run_file.parent)
+            if archive_dirs:
+                return sorted(archive_dirs, key=lambda p: p.stat().st_mtime)
+
     date = _archive_date_from_timestamp(timestamp)
     if not date:
         return []
@@ -186,18 +237,29 @@ def list_benchmarks(limit: Optional[int] = None, offset: int = 0) -> List[Dict[s
         return []
 
     benchmarks: List[Dict[str, Any]] = []
-    for benchmark_dir in sorted([p for p in BENCHMARKS_DIR.iterdir() if p.is_dir()]):
+    for benchmark_dir in _discover_benchmark_dirs():
         summary_file = benchmark_dir / "merged_summary.json"
         data = _load_json(summary_file)
         if not data:
             continue
 
+        # Change 3: nested layout -> benchmark_id = "{group}/{run}" and a
+        # benchmark_group field; flat (legacy) -> benchmark_id = name, no group.
+        nested = benchmark_dir.parent != BENCHMARKS_DIR
+        benchmark_id = (
+            f"{benchmark_dir.parent.name}/{benchmark_dir.name}" if nested
+            else benchmark_dir.name
+        )
+        benchmark_group = benchmark_dir.parent.name if nested else None
+
         metadata = data.get("metadata", {})
         timestamp = metadata.get("timestamp", "")
         victim_name = data.get("models", {}).get("victim", {}).get("name", "") or _victim_name_from_benchmark_dir(benchmark_dir)
-        trace_archives = _trace_archives_for_timestamp(timestamp, victim_name=victim_name)
+        trace_archives = _trace_archives_for_timestamp(
+            timestamp, victim_name=victim_name, benchmark_dir=benchmark_dir)
         benchmarks.append({
-            "benchmark_id": benchmark_dir.name,
+            "benchmark_id": benchmark_id,
+            "benchmark_group": benchmark_group,
             "file_path": str(summary_file),
             "timestamp": timestamp,
             "total_rounds": data.get("total_rounds", 0),
@@ -231,9 +293,11 @@ def get_benchmark(benchmark_id: str) -> Optional[Dict[str, Any]]:
     metadata = data.get("metadata", {})
     timestamp = metadata.get("timestamp", "")
     victim_name = data.get("models", {}).get("victim", {}).get("name", "") or _victim_name_from_benchmark_dir(summary_file.parent)
+    # Change 3: prefer run_*.json inside the benchmark folder's runs/ dir.
     trace_archives = [
         _summarize_trace_archive(path)
-        for path in _trace_archives_for_timestamp(timestamp, victim_name=victim_name)
+        for path in _trace_archives_for_timestamp(
+            timestamp, victim_name=victim_name, benchmark_dir=summary_file.parent)
     ]
     trace_runs = []
     for archive in trace_archives:

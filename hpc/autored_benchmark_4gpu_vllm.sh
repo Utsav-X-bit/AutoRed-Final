@@ -30,6 +30,17 @@ OUTPUT_DIR=""
 VICTIM_MODEL_ID="meta-llama/Meta-Llama-3-8B-Instruct"
 START_IDX=""
 SEED="42"
+PLANNER_TEMP_ESCALATION="0.0"
+# Task 3/5 (model-agnostic v2): cooperative seeding (default ON) + BoN N cap.
+# Empty COOPERATIVE_SEEDING = default-ON; "no" disables (--no-cooperative-seeding).
+# Empty COOPERATIVE_N = no scaling (runtime default 8); set e.g. 12 to enable BoN.
+COOPERATIVE_SEEDING=""
+COOPERATIVE_N=""
+# Benchmark grouping (Change 3): when --output-dir is not passed, the script
+# auto-generates a two-level path results/benchmarks/{BENCHMARK_NAME}/{TS}_4g
+# so runs of the same logical benchmark group together. Leave empty to use the
+# legacy flat default.
+BENCHMARK_NAME=""
 TRUST_REMOTE_CODE=0
 TOKENIZER_MODE="auto"
 VICTIM_QUANTIZATION=""
@@ -45,6 +56,8 @@ usage() {
     echo "  --dataset-path PATH        Path to defense dataset JSONL"
     echo "  --dataset-size N           Number of scenarios to load from dataset (default: 1000)"
     echo "  --output-dir PATH          Directory for per-worker and merged results"
+    echo "  --benchmark-name NAME      Logical benchmark name; when --output-dir is unset, auto-generates"
+    echo "                                   results/benchmarks/{NAME}/{timestamp}_4g (groups repeated runs)"
     echo "  --victim-model-id ID       Hugging Face model id for victim LLM (default: meta-llama/Meta-Llama-3-8B-Instruct)"
     echo "  --start-idx N              Zero-based start index for deterministic benchmark slice"
     echo "  --attempts N               Maximum attack attempts per scenario (default: 20)"
@@ -59,6 +72,13 @@ usage() {
     echo "  --max-fallback-rounds N          Mutation fallback rounds (1 default, 2 adaptive)"
     echo "  --seed N                         Random seed for dataset sampling + fallback RNG (default: 42)."
     echo "                                   Two runs sharing --seed and --start-idx are directly comparable."
+    echo "  --planner-temp-escalation F     Raise planner temperature by F when a scenario is stuck on one"
+    echo "                                   strategy for >=15 attempts (0.0 = off, default). Task 9: ship only"
+    echo "                                   if the no-fallback baseline shows >10% planner_stuck."
+    echo "  --cooperative-seeding           Seed fallback from the highest-cooperation near-miss (default ON)."
+    echo "  --no-cooperative-seeding        Disable cooperative seeding (A/B against the score-only selector)."
+    echo "  --cooperative-n N              Best-of-N round-1 variant cap on cooperative seeds (8..12, default off=8)."
+    echo "                                   Pass 12 to enable BoN scaling (arXiv:2412.03556)."
     exit 0
 }
 
@@ -71,6 +91,8 @@ while [[ $# -gt 0 ]]; do
         --dataset-path) DATASET_PATH="$2"; shift 2 ;;
         --dataset-size) DATASET_SIZE="$2"; shift 2 ;;
         --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+        --benchmark-name) BENCHMARK_NAME="$2"; shift 2 ;;
+        --benchmark-name=*) BENCHMARK_NAME="${1#*=}"; shift ;;
         --victim-model-id) VICTIM_MODEL_ID="$2"; shift 2 ;;
         --start-idx) START_IDX="$2"; shift 2 ;;
         --attempts|--max-attempts) MAX_ATTEMPTS="$2"; shift 2 ;;
@@ -86,6 +108,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --max-fallback-rounds) MAX_FALLBACK_ROUNDS="$2"; shift 2 ;;
         --max-fallback-rounds=*) MAX_FALLBACK_ROUNDS="${1#*=}"; shift ;;
+        --planner-temp-escalation) PLANNER_TEMP_ESCALATION="$2"; shift 2 ;;
+        --planner-temp-escalation=*) PLANNER_TEMP_ESCALATION="${1#*=}"; shift ;;
+        --cooperative-seeding) COOPERATIVE_SEEDING="yes"; shift ;;
+        --no-cooperative-seeding) COOPERATIVE_SEEDING="no"; shift ;;
+        --cooperative-n) COOPERATIVE_N="$2"; shift 2 ;;
+        --cooperative-n=*) COOPERATIVE_N="${1#*=}"; shift ;;
         --seed) SEED="$2"; shift 2 ;;
         --seed=*) SEED="${1#*=}"; shift ;;
         --help|-h) usage ;;
@@ -94,7 +122,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$OUTPUT_DIR" ]; then
-    OUTPUT_DIR="results/benchmarks/batched_${NUM_ROUNDS}r_4gpu"
+    # Change 3: two-level benchmark layout — group runs under a benchmark name
+    # so results/benchmarks/{name}/{timestamp}_4g/ keeps repeats together. If
+    # --benchmark-name is unset, fall back to the legacy flat default.
+    TS="$(date +%F_%H-%M-%S)_4g"
+    if [ -n "$BENCHMARK_NAME" ]; then
+        OUTPUT_DIR="results/benchmarks/${BENCHMARK_NAME}/${TS}"
+    else
+        OUTPUT_DIR="results/benchmarks/batched_${NUM_ROUNDS}r_4gpu/${TS}"
+    fi
 fi
 
 # Project root (resolved relative to script)
@@ -138,6 +174,20 @@ if [ -n "$START_IDX" ]; then
 fi
 echo "Seed         : $SEED"
 echo "Max Attempts : $MAX_ATTEMPTS"
+echo "Planner Temp Escalation : $PLANNER_TEMP_ESCALATION (0.0 = off)"
+# Cooperative seeding: blank = runtime default ON; print the effective state.
+if [ -z "$COOPERATIVE_SEEDING" ]; then
+    echo "Cooperative Seeding   : ON (runtime default)"
+elif [ "$COOPERATIVE_SEEDING" = "no" ]; then
+    echo "Cooperative Seeding   : OFF (--no-cooperative-seeding)"
+else
+    echo "Cooperative Seeding   : ON"
+fi
+if [ -n "$COOPERATIVE_N" ]; then
+    echo "Cooperative N (BoN)   : $COOPERATIVE_N"
+else
+    echo "Cooperative N (BoN)   : off (runtime default 8)"
+fi
 if [ "$TRUST_REMOTE_CODE" -eq 1 ]; then
     echo "Trust Remote : yes"
 fi
@@ -171,6 +221,25 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         # Forward adaptive-round-2 setting when fallback is enabled.
         if [ -n "${MAX_FALLBACK_ROUNDS:-}" ]; then
             WORKER_EXTRA_ARGS="$WORKER_EXTRA_ARGS --max-fallback-rounds ${MAX_FALLBACK_ROUNDS}"
+        fi
+    fi
+    # Planner temp escalation is a core-loop feature, independent of fallback;
+    # forward whenever it's set to a non-zero value (0.0 = off).
+    if [ -n "${PLANNER_TEMP_ESCALATION:-}" ] && [ "${PLANNER_TEMP_ESCALATION}" != "0.0" ]; then
+        WORKER_EXTRA_ARGS="$WORKER_EXTRA_ARGS --planner-temp-escalation ${PLANNER_TEMP_ESCALATION}"
+    fi
+    # Task 3/5 (model-agnostic v2): cooperative seeding + BoN N cap. These
+    # are fallback-only levers; forward whenever fallback is enabled. The
+    # runtime defaults cooperative seeding ON, so only forward when the user
+    # explicitly sets it (enable/disable) or sets --cooperative-n.
+    if [ "${MUTATION_FALLBACK:-0}" = "1" ]; then
+        if [ "$COOPERATIVE_SEEDING" = "no" ]; then
+            WORKER_EXTRA_ARGS="$WORKER_EXTRA_ARGS --no-cooperative-seeding"
+        elif [ "$COOPERATIVE_SEEDING" = "yes" ]; then
+            WORKER_EXTRA_ARGS="$WORKER_EXTRA_ARGS --cooperative-seeding"
+        fi
+        if [ -n "$COOPERATIVE_N" ]; then
+            WORKER_EXTRA_ARGS="$WORKER_EXTRA_ARGS --cooperative-n ${COOPERATIVE_N}"
         fi
     fi
 
