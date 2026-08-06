@@ -5180,12 +5180,44 @@ if __name__ == "__main__":
         default=1,
         help="Total number of workers for parallel benchmark (default: 1)",
     )
+    parser.add_argument(
+        "--victim-model-id",
+        default=None,
+        help="HuggingFace model id of the victim (e.g. meta-llama/Meta-Llama-3-8B-Instruct). "
+        "Used to place results under results/<mode>/<model_id>/. "
+        "If omitted, derived from the model load path.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Results root for this run, e.g. results/benchmark/<characteristics> "
+        "or results/single/<characteristics>. The segment after <mode>/ is the "
+        "characteristics label, used verbatim. If omitted, a timestamped default is used.",
+    )
     args = parser.parse_args()
 
     PLANNER_PATH = args.planner_path
     GENERATOR_PATH = args.generator_path
     BASE_GENERATOR_PATH = args.base_generator_path
     BENCHMARK_LOG_PATH = args.benchmark_output
+
+    from experiment.results_layout import resolve_model_id, parse_output_dir, runs_root
+
+    _VICTIM_MODEL_ID = resolve_model_id(args.victim_model_id, LLAMA_PATH)
+    _MODE = args.mode if args.mode in ("benchmark", "single") else "benchmark"
+    if args.mode == "extractor_benchmark":
+        _MODE = "benchmark"  # extractor benchmark reuses the benchmark tree
+    _CHARS = parse_output_dir(args.output_dir, _MODE)[1]
+    RESULTS_ROOT = runs_root(args.output_dir, _MODE, _VICTIM_MODEL_ID, _CHARS)
+    print(f"[LAYOUT] results root: {RESULTS_ROOT}")
+
+    if args.output_dir is None and args.benchmark_output != BENCHMARK_LOG_PATH:
+        print(
+            "[WARN] --benchmark-output is deprecated; use --output-dir "
+            "results/<mode>/<characteristics>. Treating its basename as characteristics."
+        )
+        _CHARS = parse_output_dir(args.benchmark_output, _MODE)[1]
+        RESULTS_ROOT = runs_root(None, _MODE, _VICTIM_MODEL_ID, _CHARS)
 
     # Load victim model (must happen inside __main__ for vLLM spawn safety)
     _load_models()
