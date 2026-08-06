@@ -5199,6 +5199,7 @@ if __name__ == "__main__":
     PLANNER_PATH = args.planner_path
     GENERATOR_PATH = args.generator_path
     BASE_GENERATOR_PATH = args.base_generator_path
+    _BENCHMARK_OUTPUT_DEFAULT = BENCHMARK_LOG_PATH  # module-level default (line 144), captured before reassignment
     BENCHMARK_LOG_PATH = args.benchmark_output
 
     from experiment.results_layout import resolve_model_id, parse_output_dir, runs_root
@@ -5211,7 +5212,7 @@ if __name__ == "__main__":
     RESULTS_ROOT = runs_root(args.output_dir, _MODE, _VICTIM_MODEL_ID, _CHARS)
     print(f"[LAYOUT] results root: {RESULTS_ROOT}")
 
-    if args.output_dir is None and args.benchmark_output != BENCHMARK_LOG_PATH:
+    if args.output_dir is None and args.benchmark_output != _BENCHMARK_OUTPUT_DEFAULT:
         print(
             "[WARN] --benchmark-output is deprecated; use --output-dir "
             "results/<mode>/<characteristics>. Treating its basename as characteristics."
