@@ -533,19 +533,63 @@ Add at the top of the function body (after the docstring), the import and a fall
     logs_dir = results_root / "logs"
 ```
 
+- [ ] **Step 1.5: Keep the real defense_id through the benchmark loop (pre-existing bug fix)**
+
+The current code drops the defense_id before the loop, so `row.name`/`scenario._defense_id` is the row POSITION, not the real defense_id. Fix the column selection and the reset_index so the real defense_id threads through to both the run JSON and the new filename.
+
+At line 3724, change:
+```python
+    # Keep only the columns we need
+    scenarios_df = scenarios_df[["opening_defense", "closing_defense", "access_code"]]
+```
+to:
+```python
+    # Keep only the columns we need — preserve defense_id (the index) as a column
+    # so it survives reset_index and threads through to run JSON + filename.
+    scenarios_df = scenarios_df[["opening_defense", "closing_defense", "access_code"]].reset_index()
+```
+(`reset_index()` with no `drop=True` moves the `defense_id` index into a regular column named `defense_id`.)
+
+At line 3728, the multi-worker branch does:
+```python
+        scenarios_list = scenarios_df.reset_index(drop=True).to_dict("records")
+```
+Change it to (no longer dropping the index, since defense_id is now a column):
+```python
+        scenarios_list = scenarios_df.to_dict("records")
+```
+(`scenarios_df` is already reset above, so this just converts to records keeping the `defense_id` column.)
+
+After this fix, `row.name` in both branches is the positional integer again (the index is now default RangeIndex), so **do not use `row.name` for the scenario id**. Use `row["defense_id"]` instead. The existing lines `scenario._defense_id = str(row.name)` (line 3752) and `"defense_id": str(row.name) if hasattr(row, "name") else "unknown"` (line 4152) must be updated to read `row["defense_id"]`:
+```python
+            scenario._defense_id = str(row["defense_id"])      # line 3752
+```
+and in `_build_benchmark_run_json` (line 4152):
+```python
+        "defense_id": str(row["defense_id"]) if "defense_id" in row else "unknown",
+```
+This also fixes the pre-existing latent bug where benchmark-mode run JSONs recorded `defense_id` as the row position.
+
 - [ ] **Step 2: Route each per-round run JSON to success/failed**
 
 In the silent branch (after `run_json = _build_benchmark_run_json(...)` at line 3820 and after `success = attempts < MAX_INTERACTIONS` at line 3831), insert before `results.append(...)` (line 3913):
 ```python
                 stage_dir = runs_dir / ("success" if success else "failed")
-                fname = run_filename(row.name if hasattr(row, "name") else i, worker_id, global_round_idx + 1)
+                fname = run_filename(row["defense_id"], worker_id, global_round_idx + 1)
                 json_path = stage_dir / fname
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(run_json, f, indent=2, default=str)
 ```
-Do the equivalent in the verbose branch (after line 3758 where `run_json` is appended and `success` is set at line 3759), using the same `stage_dir`/`run_filename` logic with the verbose branch's `i` and `worker_id`.
+In the verbose branch (after line 3758 where `run_json` is appended and `success` is set at line 3759), insert the same logic using the verbose branch's `scenario._defense_id` (now the real defense_id from Step 1.5) and the GLOBAL round index `batch_start + i + 1` (NOT the batch-local `i`):
+```python
+                stage_dir = runs_dir / ("success" if success else "failed")
+                fname = run_filename(scenario._defense_id, worker_id, batch_start + i + 1)
+                json_path = stage_dir / fname
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(run_json, f, indent=2, default=str)
+```
 
-Note: `row.name` is the defense_id in the silent branch (the dataframe is reset-index with `scenarios_df = scenarios_df[...]`; to be safe use `row.name if hasattr(row,'name') else i`). The round index `global_round_idx + 1` is the uniqueness tiebreaker.
+Note: `row["defense_id"]` is the real defense_id (after Step 1.5). The round index (`global_round_idx + 1` in the silent branch, `batch_start + i + 1` in the verbose branch) is the global 1-based round within the worker and is the uniqueness tiebreaker for repeated scenarios.
 
 - [ ] **Step 3: Replace the old bulk per-round save block**
 
