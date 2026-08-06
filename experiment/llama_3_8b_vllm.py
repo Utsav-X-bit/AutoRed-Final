@@ -4901,7 +4901,7 @@ def _silent_test(scenario: DefenseScenario, agent: RedTeamingAgent) -> tuple:
 # =============================================================================
 
 
-def save_trace(trace: list, scenario: DefenseScenario, total_attempts: int):
+def save_trace(trace: list, scenario: DefenseScenario, total_attempts: int, logs_dir: Path | None = None):
     """Save the full trace to a JSON file for later analysis."""
     output = {
         "metadata": {
@@ -4916,7 +4916,10 @@ def save_trace(trace: list, scenario: DefenseScenario, total_attempts: int):
         "trace": trace,
     }
 
-    trace_path = Path(TRACE_LOG_PATH)
+    if logs_dir is not None:
+        trace_path = logs_dir / "verbose_trace.json"
+    else:
+        trace_path = Path(TRACE_LOG_PATH)
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     with open(trace_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
@@ -5348,11 +5351,15 @@ if __name__ == "__main__":
             analyze_attack_evolution(trace)
 
             # Save trace
-            save_trace(trace, scenario, tries)
-            print(
-                f"[JSON] UI run JSON available at: "
-                f"results/{run_json['experiment']['run_id']}.json"
-            )
+            save_trace(trace, scenario, tries, logs_dir=RESULTS_ROOT / "logs")
+            from experiment.results_layout import single_run_filename
+            success = tries < MAX_INTERACTIONS
+            stage_dir = RESULTS_ROOT / "runs" / ("success" if success else "failed")
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            json_path = stage_dir / single_run_filename(scenario._defense_id)
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(run_json, f, indent=2, default=str)
+            print(f"[JSON] Run JSON saved to: {json_path}")
             print(f"[JSON] Raw terminal trace available at: {TRACE_LOG_PATH}")
 
             print(f"\n{'=' * 80}")
