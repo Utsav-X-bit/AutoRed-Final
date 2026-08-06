@@ -172,6 +172,8 @@ def merge_benchmarks(worker_paths: list[str], output_path: str) -> dict:
 
     # Save merged results
     output = Path(output_path)
+    if output.is_dir():
+        output = output / "merged_summary.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "w") as f:
         json.dump(merged, f, indent=2)
