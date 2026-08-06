@@ -3648,6 +3648,7 @@ def run_benchmark(
     verbose: bool = False,
     worker_id: int = 0,
     num_workers: int = 1,
+    results_root: Path | None = None,
 ) -> dict:
     """
     Phase 7: Run benchmark matching paper evaluation protocol.
@@ -3672,6 +3673,12 @@ def run_benchmark(
             "trace": [...] (only if verbose)
         }
     """
+    from experiment.results_layout import runs_root as _runs_root, run_filename
+    if results_root is None:
+        results_root = _runs_root(None, "benchmark", "unknown", "benchmark_default")
+    runs_dir = results_root / "runs"
+    logs_dir = results_root / "logs"
+
     benchmark_started_at = datetime.now()
     print("\n" + "=" * 80)
     if num_workers > 1:
@@ -3720,12 +3727,13 @@ def run_benchmark(
     else:
         scenarios_df = active_df.sample(n=n_rounds, random_state=42)
 
-    # Keep only the columns we need
-    scenarios_df = scenarios_df[["opening_defense", "closing_defense", "access_code"]]
+    # Keep only the columns we need — preserve defense_id (the index) as a column
+    # so it survives reset_index and threads through to run JSON + filename.
+    scenarios_df = scenarios_df[["opening_defense", "closing_defense", "access_code"]].reset_index()
 
     # Multi-worker: slice scenarios for this worker
     if num_workers > 1:
-        scenarios_list = scenarios_df.reset_index(drop=True).to_dict("records")
+        scenarios_list = scenarios_df.to_dict("records")
         per_worker = len(scenarios_list) // num_workers
         remainder = len(scenarios_list) % num_workers
         start = worker_id * per_worker + min(worker_id, remainder)
@@ -3749,7 +3757,7 @@ def run_benchmark(
                 access_code_type=row.get("access_code_type", "UNKNOWN"),
                 defense_complexity=row.get("defense_complexity", "UNKNOWN"),
             )
-            scenario._defense_id = str(row.name)
+            scenario._defense_id = str(row["defense_id"])
             batch_scenarios.append(scenario)
 
         if verbose:
@@ -3757,6 +3765,11 @@ def run_benchmark(
                 trace, attempts, run_json = verbose_test_llama(scenario, agent)
                 benchmark_run_jsons.append(run_json)
                 success = attempts < MAX_INTERACTIONS
+                stage_dir = runs_dir / ("success" if success else "failed")
+                fname = run_filename(scenario._defense_id, worker_id, batch_start + i + 1)
+                json_path = stage_dir / fname
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(run_json, f, indent=2, default=str)
                 if success:
                     total_successes += 1
                     success_attempts.append(attempts)
@@ -3829,6 +3842,11 @@ def run_benchmark(
                 benchmark_run_jsons.append(run_json)
 
                 success = attempts < MAX_INTERACTIONS
+                stage_dir = runs_dir / ("success" if success else "failed")
+                fname = run_filename(row["defense_id"], worker_id, global_round_idx + 1)
+                json_path = stage_dir / fname
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(run_json, f, indent=2, default=str)
                 if success:
                     total_successes += 1
                     success_attempts.append(attempts)
@@ -4020,24 +4038,19 @@ def run_benchmark(
     benchmark["extractor_metrics"] = ext_metrics
 
     # Save results
-    benchmark_path = Path(BENCHMARK_LOG_PATH)
-    benchmark_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(benchmark_path, "w", encoding="utf-8") as f:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    worker_summary_path = logs_dir / f"worker_{worker_id}.json"
+    with open(worker_summary_path, "w", encoding="utf-8") as f:
         json.dump(benchmark, f, indent=2)
-    print(f"\n[JSON] Benchmark summary saved to: {benchmark_path}")
+    print(f"\n[JSON] Worker summary saved to: {worker_summary_path}")
+    # Also keep the legacy BENCHMARK_LOG_PATH copy for back-compat with old tooling.
+    legacy = Path(BENCHMARK_LOG_PATH)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    with open(legacy, "w", encoding="utf-8") as f:
+        json.dump(benchmark, f, indent=2)
 
-    # JSON emission: save per-round run JSONs
-    results_dir = (
-        Path("results")
-        / benchmark_started_at.strftime("%Y-%m-%d")
-        / benchmark_started_at.strftime("%H-%M-%S_%f")
-    )
-    results_dir.mkdir(parents=True, exist_ok=True)
-    for run_json in benchmark_run_jsons:
-        json_path = results_dir / f"{run_json['experiment']['run_id']}.json"
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(run_json, f, indent=2, default=str)
-    print(f"[JSON] {len(benchmark_run_jsons)} run JSONs saved to: {results_dir}/")
+    # Per-round run JSONs are already written to runs/{success,failed}/ in the loop above.
+    print(f"[JSON] {len(benchmark_run_jsons)} run JSONs saved to: {runs_dir}/")
 
     return benchmark
 
@@ -4149,7 +4162,7 @@ def _build_benchmark_run_json(
     )
 
     raw_dataset_entry = {
-        "defense_id": str(row.name) if hasattr(row, "name") else "unknown",
+        "defense_id": str(row["defense_id"]) if "defense_id" in row else "unknown",
         "opening_defense": scenario.opening_defense,
         "closing_defense": scenario.closing_defense,
         "access_code": scenario.access_code,
@@ -5361,4 +5374,5 @@ if __name__ == "__main__":
                 verbose=False,
                 worker_id=getattr(args, "worker_id", 0),
                 num_workers=getattr(args, "num_workers", 1),
+                results_root=RESULTS_ROOT,
             )
