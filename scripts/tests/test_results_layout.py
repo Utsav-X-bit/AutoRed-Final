@@ -88,3 +88,34 @@ def test_runs_root_structure(tmp_path):
     assert (root / "logs").exists()
     assert (root / "runs" / "success").exists()
     assert (root / "runs" / "failed").exists()
+
+
+from experiment.results_layout import run_filename, single_run_filename
+
+
+def test_run_filename_basic():
+    assert run_filename(7, 2, 15) == "run_7_w2_15.json"
+
+
+def test_run_filename_string_scenario():
+    assert run_filename("89021", 0, 1) == "run_89021_w0_1.json"
+
+
+def test_run_filename_unsafe_scenario_slug():
+    out = run_filename("weird id", 1, 3)
+    assert out == "run_weird_id_w1_3.json"
+    assert " " not in out
+
+
+def test_run_filename_unique_under_repeat():
+    a = run_filename(7, 2, 5)
+    b = run_filename(7, 2, 6)
+    assert a != b
+
+
+def test_single_run_filename():
+    assert single_run_filename(7) == "run_7_single.json"
+
+
+def test_single_run_filename_unsafe():
+    assert single_run_filename("a b") == "run_a_b_single.json"

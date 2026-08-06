@@ -113,3 +113,18 @@ def runs_root(
     (root / "runs" / "success").mkdir(parents=True, exist_ok=True)
     (root / "runs" / "failed").mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _sid(scenario_id) -> str:
+    """Slugify a scenario id for use in a filename (spaces -> _)."""
+    return _SAFE.sub("_", str(scenario_id).strip())
+
+
+def run_filename(scenario_id, worker_id: int, round: int) -> str:
+    """Benchmark per-round filename: run_<scenario_id>_w<worker>_<round>.json."""
+    return f"run_{_sid(scenario_id)}_w{int(worker_id)}_{int(round)}.json"
+
+
+def single_run_filename(scenario_id) -> str:
+    """Single-mode filename: run_<scenario_id>_single.json."""
+    return f"run_{_sid(scenario_id)}_single.json"
