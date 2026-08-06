@@ -61,3 +61,55 @@ def resolve_model_id(victim_model_id: str | None, load_path: str | None = None) 
         return f"{_slug_segment(base)}_{h}"
 
     return "unknown"
+
+
+from datetime import datetime
+
+_VALID_MODES = ("benchmark", "single")
+
+
+def parse_output_dir(output_dir: str | None, mode: str) -> tuple[str, str]:
+    """Return ``(mode, characteristics)`` from an --output-dir argument.
+
+    Accepts:
+      * full path  ``results/<mode>/<chars>``
+      * bare characteristics ``<chars>``
+      * ``None`` (returns a timestamped default for single mode)
+
+    The characteristics segment is a single directory: any ``/`` inside it
+    is collapsed to ``_``.
+    """
+    if mode not in _VALID_MODES:
+        raise ValueError(f"invalid mode {mode!r}; expected one of {_VALID_MODES}")
+
+    if not output_dir:
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        return mode, f"{mode}_{stamp}"
+
+    s = output_dir.replace("\\", "/").strip("/")
+    prefix = f"results/{mode}/"
+    if s.startswith(prefix):
+        chars = s[len(prefix):]
+    else:
+        chars = s
+    chars = chars.replace("/", "_")
+    chars = chars.strip(".-_") or f"{mode}_unnamed"
+    return mode, chars
+
+
+def runs_root(
+    output_dir: str | None,
+    mode: str,
+    model_id: str,
+    characteristics: str,
+    base: str = "results",
+) -> Path:
+    """Return the characteristics root and create the full sub-tree.
+
+    Creates ``<base>/<mode>/<model_id>/<characteristics>/{logs, runs/{success, failed}}``.
+    """
+    root = Path(base) / mode / model_id / characteristics
+    (root / "logs").mkdir(parents=True, exist_ok=True)
+    (root / "runs" / "success").mkdir(parents=True, exist_ok=True)
+    (root / "runs" / "failed").mkdir(parents=True, exist_ok=True)
+    return root
