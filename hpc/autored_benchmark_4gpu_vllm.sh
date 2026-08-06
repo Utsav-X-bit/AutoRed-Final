@@ -21,7 +21,8 @@ BASE_GENERATOR_PATH=${4:-"Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2"}
 DATASET_PATH=${5:-"data/TensorTrust_subsets/subset_8_ac30_all_alpha_direct_or_deterministic_or_indirect.jsonl"}
 NUM_GPUS=4
 DATASET_SIZE=${6:-1000}
-OUTPUT_DIR=${7:-"results/benchmarks/batched_${NUM_ROUNDS}r_4gpu"}
+OUTPUT_DIR=${7:-"results/benchmark/batched_${NUM_ROUNDS}r_4gpu"}
+VICTIM_MODEL_ID=${8:-"meta-llama/Meta-Llama-3-8B-Instruct"}
 
 # Project root
 PROJECT_ROOT="/nlsasfs/home/isea/isea38/AutoRed-Final"
@@ -60,7 +61,10 @@ PIDS=()
 for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
     GPU_ID=$WORKER_ID
     WORKER_OUTPUT="$OUTPUT_DIR/worker_${WORKER_ID}.json"
-    WORKER_LOG="logs/batched_worker_${WORKER_ID}.log"
+    # Resolve the per-worker log path under the new tree: results/benchmark/<model>/<chars>/logs/
+    LOGS_DIR=$(python -c "from experiment.results_layout import resolve_model_id, parse_output_dir, runs_root; r=runs_root('$OUTPUT_DIR','benchmark',resolve_model_id('$VICTIM_MODEL_ID'),parse_output_dir('$OUTPUT_DIR','benchmark')[1]); print(r/'logs')")
+    mkdir -p "$LOGS_DIR"
+    WORKER_LOG="$LOGS_DIR/worker_${WORKER_ID}.log"
 
     echo ""
     echo "[LAUNCH] Worker $WORKER_ID on GPU $GPU_ID (Processing 16 scenarios at a time)"
@@ -73,6 +77,8 @@ for WORKER_ID in $(seq 0 $((NUM_GPUS - 1))); do
         --rounds "$NUM_ROUNDS" \
         --dataset-size "$DATASET_SIZE" \
         --benchmark-output "$WORKER_OUTPUT" \
+        --output-dir "$OUTPUT_DIR" \
+        --victim-model-id "$VICTIM_MODEL_ID" \
         --worker-id "$WORKER_ID" \
         --num-workers "$NUM_GPUS" \
         --planner-path "$PLANNER_PATH" \
@@ -108,7 +114,7 @@ done
 
 if [ $FAILED -ne 0 ]; then
     echo ""
-    echo "[ERROR] One or more workers failed. Check logs/batched_worker_*.log for details."
+    echo "[ERROR] One or more workers failed. Check ${LOGS_DIR:-logs}/worker_*.log for details."
     echo "Partial results in: $OUTPUT_DIR/"
     exit 1
 fi
@@ -124,15 +130,17 @@ echo "============================================="
 echo ""
 echo "[MERGE] Combining results from $NUM_GPUS workers..."
 
+LOGS_DIR=$(python -c "from experiment.results_layout import resolve_model_id, parse_output_dir, runs_root; r=runs_root('$OUTPUT_DIR','benchmark',resolve_model_id('$VICTIM_MODEL_ID'),parse_output_dir('$OUTPUT_DIR','benchmark')[1]); print(r/'logs')")
+
 python scripts/merge_benchmarks.py \
-    --output "$OUTPUT_DIR/merged_summary.json" \
-    --worker-results "$OUTPUT_DIR"/worker_*.json
+    --output "$LOGS_DIR" \
+    --worker-results "$LOGS_DIR"/worker_*.json
 
 if [ $? -eq 0 ]; then
     echo ""
     echo "============================================="
     echo "Benchmark complete!"
-    echo "Merged results: $OUTPUT_DIR/merged_summary.json"
+    echo "Merged results: $LOGS_DIR/merged_summary.json"
     echo "============================================="
 else
     echo "[ERROR] Merge script failed!"
