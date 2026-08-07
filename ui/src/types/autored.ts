@@ -223,6 +223,10 @@ export interface BenchmarkMetrics {
 
 export interface BenchmarkListItem {
   benchmark_id: string;
+  /** Model group for nested-layout ids ("<model>/<chars>"); null for legacy flat ids. */
+  benchmark_group?: string | null;
+  /** On-disk layout: "nested" (results/benchmark/<model>/<chars>) or "legacy" (results/benchmarks/<name>). */
+  layout?: "nested" | "legacy";
   file_path: string;
   timestamp: string;
   total_rounds: number;
@@ -275,6 +279,8 @@ export interface TraceArchiveDetail {
 
 export interface BenchmarkDetail {
   benchmark_id: string;
+  benchmark_group?: string | null;
+  layout?: "nested" | "legacy";
   summary: Record<string, any>;
   metadata: Record<string, any>;
   worker_summaries: BenchmarkWorkerSummary[];

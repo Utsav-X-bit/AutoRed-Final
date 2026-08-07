@@ -68,7 +68,11 @@ const sortTraceRuns = (runs: TraceRunListItem[]) =>
 
 export default function BenchmarkDashboard() {
   const navigate = useNavigate();
-  const { benchmarkId } = useParams<{ benchmarkId?: string }>();
+  // Nested benchmark_ids are slash-form "<model>/<chars>". The router stores the
+  // URL-encoded form ("%2F"); decode once here so comparisons against the raw
+  // API value (decoded) match. Legacy single-segment ids decode to themselves.
+  const { benchmarkId: rawBenchmarkId } = useParams<{ benchmarkId?: string }>();
+  const benchmarkId = rawBenchmarkId ? decodeURIComponent(rawBenchmarkId) : undefined;
   const [benchmarks, setBenchmarks] = useState<BenchmarkListItem[]>([]);
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState<string>('');
   const [benchmarkDetail, setBenchmarkDetail] = useState<BenchmarkDetail | null>(null);
@@ -487,7 +491,7 @@ export default function BenchmarkDashboard() {
                   <tr>
                     <Th>Run</Th>
                     <Th>Scenario</Th>
-                    <Th>Archive</Th>
+                    <Th>Stage</Th>
                     <Th>Worker</Th>
                     <Th>Attempts</Th>
                     <Th>Status</Th>
